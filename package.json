@@ -1,0 +1,13 @@
+{
+  "name": "garage61-sso",
+  "version": "1.0.0",
+  "description": "Garage61 SSO integration with Outseta for Vercel",
+  "main": "api/auth/garage61.js",
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.x"
+  }
+}
+
