@@ -31,6 +31,8 @@ In Outseta dashboard:
 2. Add these custom fields (if not already present):
    - `Garage61Username` (Text)
    - `Garage61Id` (Text)
+   - `iRacingUsername` (Text) - Auto-populated if user has iRacing linked to Garage61
+   - `IRacingId` (Text) - Auto-populated if user has iRacing linked to Garage61
 
 ### 3. Deploy Backend to Vercel
 
@@ -66,6 +68,14 @@ OUTSETA_SECRET_KEY=your_secret_key
 ✅ 8-second timeouts on all API calls  
 ✅ Error messages sanitized before display  
 
+## ✨ Features
+
+- **Unified Identity**: Automatically links Garage61, iRacing, and Outseta accounts
+- **iRacing Auto-Sync**: If user has iRacing linked to Garage61, their iRacing data is automatically synced to Outseta
+- **Field Consistency**: Uses same field names as iRacing SSO (`iRacingUsername`, `IRacingId`) for compatibility
+- **Graceful Fallback**: Works perfectly even if iRacing data is not available
+- **Smart Updates**: Only updates fields that have changed to minimize API calls
+
 ## 🔄 OAuth Flow
 
 1. User clicks "Sign in with Garage61" button
@@ -74,10 +84,11 @@ OUTSETA_SECRET_KEY=your_secret_key
 4. Garage61 redirects to callback with auth code
 5. Backend exchanges code for access token
 6. Backend fetches user profile from Garage61
-7. Backend creates/updates user in Outseta
-8. Backend generates Outseta JWT token
-9. Token sent to frontend via postMessage
-10. Frontend sets Outseta token and redirects
+7. Backend fetches connected accounts (checks for linked iRacing account)
+8. Backend creates/updates user in Outseta (includes iRacing data if available)
+9. Backend generates Outseta JWT token
+10. Token sent to frontend via postMessage
+11. Frontend sets Outseta token and redirects
 
 ## 🛠️ Testing
 
@@ -89,9 +100,15 @@ OUTSETA_SECRET_KEY=your_secret_key
 
 ## 📝 Notes
 
-- **Garage61 API Endpoints**: The OAuth endpoints in this code (`https://auth.garage61.com`, `https://api.garage61.com`) are placeholders. Update them based on actual Garage61 API documentation.
+- **Garage61 API Endpoints**: The OAuth endpoints in this code (`https://auth.garage61.com`, `https://garage61.net/api/v1/`) are placeholders. Update them based on actual Garage61 API documentation.
+- **iRacing Data Source**: iRacing data is fetched from Garage61's `/v1/getAccounts` endpoint (see [API docs](https://garage61.net/developer/endpoints/v1/getAccounts))
 - **Scopes**: Adjust OAuth scopes based on what data you need from Garage61.
-- **Custom Fields**: Garage61Username and Garage61Id are stored as custom properties in Outseta.
+- **Custom Fields**: The following fields are stored in Outseta:
+  - `Garage61Username` & `Garage61Id` - Always populated from Garage61
+  - `iRacingUsername` & `IRacingId` - Only populated if user has linked iRacing to Garage61
+- **Field Mapping**: 
+  - `iRacingData.displayName` → `iRacingUsername` in Outseta
+  - `iRacingData.custId` → `IRacingId` in Outseta
 
 ## 🐛 Troubleshooting
 
