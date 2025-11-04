@@ -138,7 +138,7 @@ async function findOrCreateOutsetaUser(garageUser, iRacingData) {
   const desiredIRacing = iRacingData
     ? {
         iRacingUsername: iRacingData.displayName || '',
-        IRacingId: iRacingData.custId || '',
+        iRacingId: iRacingData.custId || '',
       }
     : {};
 
@@ -157,7 +157,7 @@ async function findOrCreateOutsetaUser(garageUser, iRacingData) {
         person.Garage61Id !== desiredGarage.Garage61Id;
       const needsIRacingUpdate =
         desiredIRacing.iRacingUsername &&
-        (person.iRacingUsername !== desiredIRacing.iRacingUsername || person.IRacingId !== desiredIRacing.IRacingId);
+        (person.iRacingUsername !== desiredIRacing.iRacingUsername || person.iRacingId !== desiredIRacing.iRacingId);
 
       if (needsGarageUpdate || needsIRacingUpdate) {
         await axios.put(
