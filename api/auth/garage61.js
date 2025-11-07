@@ -1,4 +1,5 @@
 const axios = require('axios');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { kv } = require('@vercel/kv');
 
@@ -20,6 +21,7 @@ const allowedEmailUrls = [
 ];
 const DEFAULT_RETURN_URL = allowedReturnUrls[0];
 const DEFAULT_EMAIL_PAGE_URL = allowedEmailUrls[0];
+const ACCOUNT_CONFLICT_MESSAGE = "This email is already registered. Please sign in using a known method, then link this provider from your account settings.";
 
 const redirectHostAllowlist = new Set([
   ...allowedReturnUrls.map(getHost),
@@ -102,17 +104,48 @@ async function handleStart(req, res) {
     return res.status(500).send('Garage61 client ID not configured');
   }
 
+  const intent = (req.query.intent || 'login').toLowerCase();
+  if (!['login', 'link'].includes(intent)) {
+    return res.status(400).send('Invalid intent');
+  }
+
   const requestedReturnUrl = req.query.return_url;
   const requestedEmailPageUrl = req.query.email_page_url;
 
   const returnUrl = sanitizeRedirect(requestedReturnUrl, DEFAULT_RETURN_URL);
   const emailPageUrl = sanitizeRedirect(requestedEmailPageUrl, DEFAULT_EMAIL_PAGE_URL);
 
+  let linkPersonUid = null;
+  if (intent === 'link') {
+    const linkToken = req.query.link_token;
+    const requestedLinkUid = req.query.link_person_uid;
+
+    if (!linkToken || !requestedLinkUid) {
+      return res.status(400).send('Missing linking parameters');
+    }
+
+    try {
+      const profile = await verifyOutsetaAccessToken(linkToken);
+      if (profile?.Uid !== requestedLinkUid) {
+        return res.status(403).send('Invalid linking session');
+      }
+    } catch (err) {
+      console.error('Failed to verify Outseta token for linking', err.message);
+      return res.status(403).send('Invalid linking session');
+    }
+
+    linkPersonUid = requestedLinkUid;
+  }
+
   const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
   // Store return URL and email page URL in Vercel KV with 10 minute expiration
-  const state = require('crypto').randomBytes(16).toString('hex');
-  await kv.set(`garage61:state:${state}`, { returnUrl, emailPageUrl, createdAt: Date.now() }, { ex: 600 });
+  const state = crypto.randomBytes(16).toString('hex');
+  await kv.set(
+    `garage61:state:${state}`,
+    { returnUrl, emailPageUrl, intent, linkPersonUid, createdAt: Date.now() },
+    { ex: 600 }
+  );
 
   const url =
     'https://garage61.net/app/account/oauth' +
@@ -132,6 +165,8 @@ async function handleCallback(req, res, code) {
     const stateData = await kv.get(`garage61:state:${state}`);
     const returnUrl = stateData?.returnUrl;
     const emailPageUrl = stateData?.emailPageUrl;
+    const intent = (stateData?.intent || 'login').toLowerCase();
+    const linkPersonUid = stateData?.linkPersonUid || null;
 
     if (!returnUrl) {
       console.error('State not found for Garage61 OAuth');
@@ -165,52 +200,85 @@ async function handleCallback(req, res, code) {
     });
 
     const garageUser = userResponse.data;
+    const iRacingData = await fetchGarage61iRacing(accessToken);
 
-    const iRacingData = await fetchGarage61IRacing(accessToken);
-
-    // Check if user already exists by Garage61Id (auto-login)
     const garage61Id = garageUser.sub || '';
-    if (garage61Id) {
-      const existingUser = await findExistingUserByGarage61Id(garage61Id);
-      if (existingUser) {
-        const outsetaToken = await generateOutsetaToken(existingUser.Email);
-        return res.send(renderSuccessPage(outsetaToken, returnUrl));
+    const normalizedEmail = garageUser.email
+      ? String(garageUser.email).trim().toLowerCase()
+      : null;
+
+    const existingByGarageId = garage61Id
+      ? await findPersonByField('Garage61Id', garage61Id)
+      : null;
+
+    if (existingByGarageId) {
+      if (intent === 'link') {
+        if (!linkPersonUid || existingByGarageId.Uid !== linkPersonUid) {
+          return res.send(
+            renderRedirectWithError(returnUrl, 'account_exists', ACCOUNT_CONFLICT_MESSAGE)
+          );
+        }
+
+        return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
       }
+
+      const outsetaToken = await generateOutsetaToken(existingByGarageId.Email);
+      return res.send(renderSuccessPage(outsetaToken, returnUrl));
     }
 
-    // Check if email is provided
-    if (!garageUser.email) {
-      // Generate temp token with user data for email collection
-      const crypto = require('crypto');
-      const csrfToken = crypto.randomBytes(16).toString('hex');
-      const tempToken = jwt.sign(
-        {
-          garageUser,
-          iRacingData,
-          returnUrl,
-          provider: 'garage61',
-          csrf: csrfToken,
-        },
-        process.env.TEMP_TOKEN_SECRET,
-        { expiresIn: '10m' }
-      );
+    if (intent === 'link') {
+      if (!linkPersonUid) {
+        return res.send(renderErrorPage('Linking session expired.'));
+      }
 
-      // Redirect to Framer email collection page
-      return res.send(renderRedirectToFramer(emailPageUrl, tempToken));
+      const person = await getPersonByUid(linkPersonUid);
+      if (!person) {
+        return res.send(renderErrorPage('Unable to locate your account.'));
+      }
+
+      await updatePerson(linkPersonUid, buildGarage61UpdatePayload(person, garageUser, iRacingData));
+      return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
     }
 
-    const outsetaPerson = await findOrCreateOutsetaUser(garageUser, iRacingData);
+    if (normalizedEmail) {
+      const existingByEmail = await findPersonByEmail(normalizedEmail);
+      if (existingByEmail) {
+        return res.send(
+          renderRedirectWithError(returnUrl, 'account_exists', ACCOUNT_CONFLICT_MESSAGE)
+        );
+      }
 
-    const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
+      const createdPerson = await createGarage61OutsetaUser({
+        garageUser,
+        iRacingData,
+        email: normalizedEmail,
+      });
 
-    return res.send(renderSuccessPage(outsetaToken, returnUrl));
+      const outsetaToken = await generateOutsetaToken(createdPerson.Email);
+      return res.send(renderSuccessPage(outsetaToken, returnUrl));
+    }
+
+    const csrfToken = crypto.randomBytes(16).toString('hex');
+    const tempToken = jwt.sign(
+      {
+        garageUser,
+        iRacingData,
+        returnUrl,
+        provider: 'garage61',
+        csrf: csrfToken,
+      },
+      process.env.TEMP_TOKEN_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    return res.send(renderRedirectToFramer(emailPageUrl, tempToken));
   } catch (err) {
     dumpError('[Garage61SSO]', err);
     return res.send(renderErrorPage('Unable to complete Garage61 sign in.'));
   }
 }
 
-async function fetchGarage61IRacing(accessToken) {
+async function fetchGarage61iRacing(accessToken) {
   try {
     const response = await axios.get('https://garage61.net/api/v1/me/accounts', {
       headers: {
@@ -236,99 +304,55 @@ async function fetchGarage61IRacing(accessToken) {
   }
 }
 
-async function findExistingUserByGarage61Id(garage61Id) {
-  const apiBase = `https://${process.env.OUTSETA_DOMAIN}/api/v1`;
-  const authHeader = { Authorization: `Outseta ${process.env.OUTSETA_API_KEY}:${process.env.OUTSETA_SECRET_KEY}` };
+function buildGarage61UpdatePayload(person, garageUser, iRacingData) {
+  const garageUsername = garageUser.preferred_username || garageUser.name || person.Garage61Username || '';
 
-  try {
-    const search = await axios.get(`${apiBase}/crm/people`, {
-      headers: authHeader,
-      params: { Garage61Id: garage61Id },
-      timeout: 8000,
-    });
+  const payload = {
+    Uid: person.Uid,
+    Email: person.Email,
+    FirstName: person.FirstName,
+    LastName: person.LastName,
+    Garage61Username: garageUsername,
+    Garage61Id: garageUser.sub || person.Garage61Id || '',
+  };
 
-    if (search.data.items && search.data.items.length > 0) {
-      return search.data.items[0];
-    }
-  } catch (err) {
-    console.warn('Garage61 ID search failed:', err.message);
+  if (iRacingData?.displayName) {
+    payload.iRacingUsername = iRacingData.displayName;
+  }
+  if (iRacingData?.custId) {
+    payload.iRacingId = iRacingData.custId;
   }
 
-  return null;
+  return payload;
 }
 
-async function findOrCreateOutsetaUser(garageUser, iRacingData) {
-  const apiBase = `https://${process.env.OUTSETA_DOMAIN}/api/v1`;
-  const authHeader = { Authorization: `Outseta ${process.env.OUTSETA_API_KEY}:${process.env.OUTSETA_SECRET_KEY}` };
-
-  const email = garageUser.email;
+async function createGarage61OutsetaUser({ garageUser, iRacingData, email }) {
   const firstName = garageUser.given_name || garageUser.name || 'Garage61';
   const lastName = garageUser.family_name || 'User';
-  const desiredGarage = {
-    Garage61Username: garageUser.preferred_username || garageUser.name || '',
+  const garageUsername = garageUser.preferred_username || garageUser.name || '';
+  const fullName = `${firstName} ${lastName}`.trim();
+
+  const personPayload = {
+    Email: email,
+    FirstName: firstName,
+    LastName: lastName,
+    Garage61Username: garageUsername,
     Garage61Id: garageUser.sub || '',
   };
-  const desiredIRacing = iRacingData
-    ? {
-        iRacingUsername: iRacingData.displayName || '',
-        iRacingId: iRacingData.custId || '',
-      }
-    : {};
 
-  // Try to find existing person
-  try {
-    const search = await axios.get(`${apiBase}/crm/people`, {
-      headers: authHeader,
-      params: { Email: email },
-      timeout: 8000,
-    });
-
-    if (search.data.items && search.data.items.length > 0) {
-      const person = search.data.items[0];
-      const needsGarageUpdate =
-        person.Garage61Username !== desiredGarage.Garage61Username ||
-        person.Garage61Id !== desiredGarage.Garage61Id;
-      const needsIRacingUpdate =
-        desiredIRacing.iRacingUsername &&
-        (person.iRacingUsername !== desiredIRacing.iRacingUsername || person.iRacingId !== desiredIRacing.iRacingId);
-
-      if (needsGarageUpdate || needsIRacingUpdate) {
-        await axios.put(
-          `${apiBase}/crm/people/${person.Uid}`,
-          {
-            Uid: person.Uid,
-            Email: person.Email,
-            FirstName: person.FirstName,
-            LastName: person.LastName,
-            ...desiredGarage,
-            ...desiredIRacing,
-          },
-          {
-            headers: { ...authHeader, 'Content-Type': 'application/json' },
-            timeout: 8000,
-          }
-        );
-      }
-
-      return person;
-    }
-  } catch (err) {
-    console.warn('Outseta search failed, will try to create:', err.message);
+  if (iRacingData?.displayName) {
+    personPayload.iRacingUsername = iRacingData.displayName;
+  }
+  if (iRacingData?.custId) {
+    personPayload.iRacingId = iRacingData.custId;
   }
 
-  // Use /crm/registrations endpoint with free subscription
-  const createPayload = {
-    Name: `${firstName} ${lastName}`,
+  const registration = await createRegistration({
+    Name: fullName || 'Garage61 User',
     PersonAccount: [
       {
         IsPrimary: true,
-        Person: {
-          Email: email,
-          FirstName: firstName,
-          LastName: lastName,
-          ...desiredGarage,
-          ...desiredIRacing,
-        },
+        Person: personPayload,
       },
     ],
     Subscriptions: [
@@ -339,21 +363,9 @@ async function findOrCreateOutsetaUser(garageUser, iRacingData) {
         BillingRenewalTerm: 1,
       },
     ],
-  };
+  });
 
-  const createResponse = await axios.post(
-    `${apiBase}/crm/registrations`,
-    createPayload,
-    {
-      headers: {
-        ...authHeader,
-        'Content-Type': 'application/json',
-      },
-      timeout: 8000,
-    }
-  );
-
-  return createResponse.data.PrimaryContact;
+  return registration.PrimaryContact;
 }
 
 async function generateOutsetaToken(email) {
@@ -425,12 +437,28 @@ async function handleCompleteRegistration(req, res) {
       return res.status(400).json({ error: 'Invalid characters in input' });
     }
 
-    // Split name into first and last name
+    const garageSub = tokenData.garageUser?.sub ? String(tokenData.garageUser.sub) : '';
+    const existingByEmail = await findPersonByEmail(sanitizedEmail);
+    if (existingByEmail) {
+      if (
+        existingByEmail.Garage61Id &&
+        String(existingByEmail.Garage61Id) === garageSub
+      ) {
+        const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
+        return res.status(200).json({
+          success: true,
+          outsetaToken,
+          returnUrl: tokenData.returnUrl,
+        });
+      }
+
+      return res.status(409).json({ error: ACCOUNT_CONFLICT_MESSAGE });
+    }
+
     const nameParts = sanitizedName.split(/\s+/);
     const firstName = nameParts[0] || 'Garage61';
     const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'User';
 
-    // Add email to garageUser data
     const garageUserWithEmail = {
       ...tokenData.garageUser,
       email: sanitizedEmail,
@@ -438,21 +466,67 @@ async function handleCompleteRegistration(req, res) {
       family_name: lastName,
     };
 
-    // Create Outseta account
-    const outsetaPerson = await findOrCreateOutsetaUser(garageUserWithEmail, tokenData.iRacingData);
+    const createdPerson = await createGarage61OutsetaUser({
+      garageUser: garageUserWithEmail,
+      iRacingData: tokenData.iRacingData,
+      email: sanitizedEmail,
+    });
 
-    // Generate Outseta token
-    const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
+    const outsetaToken = await generateOutsetaToken(createdPerson.Email);
 
-    return res.status(200).json({ 
-      success: true, 
+    return res.status(200).json({
+      success: true,
       outsetaToken,
-      returnUrl: tokenData.returnUrl 
+      returnUrl: tokenData.returnUrl,
     });
   } catch (err) {
     dumpError('[Garage61SSO] complete-registration', err);
     return res.status(500).json({ error: 'Unable to complete registration' });
   }
+}
+
+function renderRedirectWithError(returnUrl, code, message) {
+  const url = new URL(returnUrl);
+  const params = new URLSearchParams(url.hash?.replace(/^#/, '') || '');
+  params.set('error', code);
+  if (message) {
+    params.set('message', message);
+  }
+  url.hash = params.toString();
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Redirecting...</title>
+  </head>
+  <body>
+    <script>
+      window.location.href = ${JSON.stringify(url.toString())};
+    </script>
+  </body>
+</html>`;
+}
+
+function renderLinkSuccessPage(returnUrl, provider) {
+  const url = new URL(returnUrl);
+  const params = new URLSearchParams(url.hash?.replace(/^#/, '') || '');
+  params.set('link', 'success');
+  params.set('provider', provider);
+  url.hash = params.toString();
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Link Successful</title>
+  </head>
+  <body>
+    <script>
+      window.location.href = ${JSON.stringify(url.toString())};
+    </script>
+  </body>
+</html>`;
 }
 
 function renderRedirectToFramer(framerUrl, tempToken) {
@@ -518,6 +592,99 @@ function getBaseUrl(req) {
   const protocol = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${protocol}://${host}`;
+}
+
+function getOutsetaApiBase() {
+  if (!process.env.OUTSETA_DOMAIN) {
+    throw new Error('OUTSETA_DOMAIN not configured');
+  }
+  return `https://${process.env.OUTSETA_DOMAIN}/api/v1`;
+}
+
+function getOutsetaAuthHeaders() {
+  if (!process.env.OUTSETA_API_KEY || !process.env.OUTSETA_SECRET_KEY) {
+    throw new Error('Outseta API credentials not configured');
+  }
+
+  return {
+    Authorization: `Outseta ${process.env.OUTSETA_API_KEY}:${process.env.OUTSETA_SECRET_KEY}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+async function verifyOutsetaAccessToken(token) {
+  if (!token) {
+    throw new Error('Missing Outseta access token');
+  }
+
+  const apiBase = getOutsetaApiBase();
+
+  const response = await axios.get(`${apiBase}/profile`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    timeout: 8000,
+  });
+
+  return response.data;
+}
+
+async function getPersonByUid(uid) {
+  if (!uid) return null;
+
+  const apiBase = getOutsetaApiBase();
+  const response = await axios.get(`${apiBase}/crm/people/${uid}`, {
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+  });
+
+  return response.data;
+}
+
+async function findPersonByEmail(email) {
+  if (!email) return null;
+
+  const apiBase = getOutsetaApiBase();
+  const response = await axios.get(`${apiBase}/crm/people`, {
+    headers: getOutsetaAuthHeaders(),
+    params: { Email: email },
+    timeout: 8000,
+  });
+
+  return response.data.items?.[0] ?? null;
+}
+
+async function findPersonByField(field, value) {
+  if (!field || value == null) return null;
+
+  const apiBase = getOutsetaApiBase();
+  const response = await axios.get(`${apiBase}/crm/people`, {
+    headers: getOutsetaAuthHeaders(),
+    params: { [field]: value },
+    timeout: 8000,
+  });
+
+  return response.data.items?.[0] ?? null;
+}
+
+async function updatePerson(uid, payload) {
+  if (!uid) throw new Error('Cannot update person without UID');
+
+  const apiBase = getOutsetaApiBase();
+  await axios.put(`${apiBase}/crm/people/${uid}`, payload, {
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+  });
+}
+
+async function createRegistration(payload) {
+  const apiBase = getOutsetaApiBase();
+  const response = await axios.post(`${apiBase}/crm/registrations`, payload, {
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+  });
+
+  return response.data;
 }
 
 function dumpError(tag, error) {

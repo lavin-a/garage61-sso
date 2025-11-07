@@ -32,7 +32,7 @@ In Outseta dashboard:
    - `Garage61Username` (Text)
    - `Garage61Id` (Text)
    - `iRacingUsername` (Text) - Auto-populated if user has iRacing linked to Garage61
-   - `IRacingId` (Text) - Auto-populated if user has iRacing linked to Garage61
+   - `iRacingId` (Text) - Auto-populated if user has iRacing linked to Garage61
 
 ### 3. Deploy Backend to Vercel
 
@@ -72,7 +72,7 @@ OUTSETA_SECRET_KEY=your_secret_key
 
 - **Unified Identity**: Automatically links Garage61, iRacing, and Outseta accounts
 - **iRacing Auto-Sync**: If user has iRacing linked to Garage61, their iRacing data is automatically synced to Outseta
-- **Field Consistency**: Uses same field names as iRacing SSO (`iRacingUsername`, `IRacingId`) for compatibility
+- **Field Consistency**: Uses same field names as iRacing SSO (`iRacingUsername`, `iRacingId`) for compatibility
 - **Graceful Fallback**: Works perfectly even if iRacing data is not available
 - **Smart Updates**: Only updates fields that have changed to minimize API calls
 
@@ -105,10 +105,10 @@ OUTSETA_SECRET_KEY=your_secret_key
 - **Scopes**: Adjust OAuth scopes based on what data you need from Garage61.
 - **Custom Fields**: The following fields are stored in Outseta:
   - `Garage61Username` & `Garage61Id` - Always populated from Garage61
-  - `iRacingUsername` & `IRacingId` - Only populated if user has linked iRacing to Garage61
+  - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
 - **Field Mapping**: 
   - `iRacingData.displayName` → `iRacingUsername` in Outseta
-  - `iRacingData.custId` → `IRacingId` in Outseta
+  - `iRacingData.custId` → `iRacingId` in Outseta
 
 ## 🐛 Troubleshooting
 
