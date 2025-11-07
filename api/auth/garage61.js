@@ -1,4 +1,5 @@
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
 
 const allowedOrigins = [
   'https://aware-amount-178968.framer.app',
@@ -20,7 +21,12 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  const { code } = req.query;
+  const { code, action } = req.query;
+
+  // Handle complete-registration endpoint (POST)
+  if (req.method === 'POST' && action === 'complete-registration') {
+    return handleCompleteRegistration(req, res);
+  }
 
   if (!code) {
     return handleStart(req, res);
@@ -41,8 +47,7 @@ function handleStart(req, res) {
     `?response_type=code` +
     `&client_id=${encodeURIComponent(process.env.GARAGE61_CLIENT_ID)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=email` +
-    `&prompt=none`;
+    `&scope=email` ;
 
   res.writeHead(302, { Location: url });
   res.end();
@@ -77,6 +82,34 @@ async function handleCallback(req, res, code) {
     const garageUser = userResponse.data;
 
     const iRacingData = await fetchGarage61IRacing(accessToken);
+
+    // Check if user already exists by Garage61Id (auto-login)
+    const garage61Id = garageUser.sub || '';
+    if (garage61Id) {
+      const existingUser = await findExistingUserByGarage61Id(garage61Id);
+      if (existingUser) {
+        const outsetaToken = await generateOutsetaToken(existingUser.Email);
+        return res.send(renderSuccessPage(outsetaToken));
+      }
+    }
+
+    // Check if email is provided
+    if (!garageUser.email) {
+      // Generate temp token with user data for email collection
+      const tempToken = jwt.sign(
+        {
+          garageUser,
+          iRacingData,
+          provider: 'garage61',
+        },
+        process.env.TEMP_TOKEN_SECRET,
+        { expiresIn: '10m' }
+      );
+
+      // Redirect to Framer page for email collection
+      const framerEmailPage = process.env.FRAMER_EMAIL_PAGE_URL || 'https://aware-amount-178968.framer.app/link-email';
+      return res.send(renderRedirectToFramer(framerEmailPage, tempToken));
+    }
 
     const outsetaPerson = await findOrCreateOutsetaUser(garageUser, iRacingData);
 
@@ -113,6 +146,27 @@ async function fetchGarage61IRacing(accessToken) {
     console.warn('Garage61 linked accounts unavailable:', err.response?.status || err.message);
     return null;
   }
+}
+
+async function findExistingUserByGarage61Id(garage61Id) {
+  const apiBase = `https://${process.env.OUTSETA_DOMAIN}/api/v1`;
+  const authHeader = { Authorization: `Outseta ${process.env.OUTSETA_API_KEY}:${process.env.OUTSETA_SECRET_KEY}` };
+
+  try {
+    const search = await axios.get(`${apiBase}/crm/people`, {
+      headers: authHeader,
+      params: { Garage61Id: garage61Id },
+      timeout: 8000,
+    });
+
+    if (search.data.items && search.data.items.length > 0) {
+      return search.data.items[0];
+    }
+  } catch (err) {
+    console.warn('Garage61 ID search failed:', err.message);
+  }
+
+  return null;
 }
 
 async function findOrCreateOutsetaUser(garageUser, iRacingData) {
@@ -230,6 +284,72 @@ async function generateOutsetaToken(email) {
   return tokenResponse.data.access_token || tokenResponse.data;
 }
 
+async function handleCompleteRegistration(req, res) {
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { tempToken, email, name } = body;
+
+    if (!tempToken || !email) {
+      return res.status(400).json({ error: 'Missing tempToken or email' });
+    }
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+
+    // Verify and decode the temporary token
+    let tokenData;
+    try {
+      tokenData = jwt.verify(tempToken, process.env.TEMP_TOKEN_SECRET);
+    } catch (err) {
+      console.error('Invalid or expired temp token:', err.message);
+      return res.status(400).json({ error: 'Invalid or expired token. Please try signing in again.' });
+    }
+
+    // Split name into first and last name
+    const nameParts = name.trim().split(/\s+/);
+    const firstName = nameParts[0] || 'Garage61';
+    const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'User';
+
+    // Add email to garageUser data
+    const garageUserWithEmail = {
+      ...tokenData.garageUser,
+      email,
+      given_name: firstName,
+      family_name: lastName,
+    };
+
+    // Create Outseta account
+    const outsetaPerson = await findOrCreateOutsetaUser(garageUserWithEmail, tokenData.iRacingData);
+
+    // Generate Outseta token
+    const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
+
+    // Return JSON with token for EmailFormHandler to send via postMessage
+    return res.status(200).json({ success: true, outsetaToken });
+  } catch (err) {
+    dumpError('[Garage61SSO] complete-registration', err);
+    return res.status(500).json({ error: 'Unable to complete registration' });
+  }
+}
+
+function renderRedirectToFramer(framerUrl, tempToken) {
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Redirecting...</title>
+  </head>
+  <body>
+    <script>
+      const baseUrl = ${JSON.stringify(framerUrl)};
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      window.location.href = baseUrl + separator + 'popup=true#token=' + ${JSON.stringify(tempToken)};
+    </script>
+  </body>
+</html>`;
+}
+
 function renderSuccessPage(token) {
   return `<!DOCTYPE html>
 <html>
@@ -258,8 +378,9 @@ function renderErrorPage(message) {
     <meta charset="utf-8" />
     <title>Garage61 Sign In</title>
     <style>
-      body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
-      p { color: #555; }
+      body { background-color: #0a0a0a; margin: 0; font-family: serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
+      p, h1 { color: rgba(255, 255, 255, 0.8); }
+      button { background-color: rgba(255, 255, 255, 0.1); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; }
     </style>
   </head>
   <body>
