@@ -1,16 +1,24 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+const { kv } = require('@vercel/kv');
 
 const allowedOrigins = [
   'https://aware-amount-178968.framer.app',
   'https://almeidaracingacademy.com',
   'https://www.almeidaracingacademy.com',
-  'https://almeidaracingacademy.outseta.com',
 ];
+
+// Rate limiting: 10 requests per minute per IP
+async function checkRateLimit(ip) {
+  const key = `garage61:ratelimit:${ip}`;
+  const count = await kv.incr(key);
+  if (count === 1) await kv.expire(key, 60);
+  return count <= 10;
+}
 
 module.exports = async (req, res) => {
   const origin = req.headers.origin || req.headers.referer;
-  if (allowedOrigins.includes(origin) || origin?.endsWith('.framer.app')) {
+  if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -19,6 +27,12 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  // Rate limiting
+  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection?.remoteAddress || 'unknown';
+  if (!await checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
   }
 
   const { code, action } = req.query;
@@ -35,7 +49,7 @@ module.exports = async (req, res) => {
   return handleCallback(req, res, code);
 };
 
-function handleStart(req, res) {
+async function handleStart(req, res) {
   if (!process.env.GARAGE61_CLIENT_ID) {
     return res.status(500).send('Garage61 client ID not configured');
   }
@@ -49,11 +63,9 @@ function handleStart(req, res) {
 
   const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
-  // Store return URL and email page URL in a simple map (in production, use Redis)
+  // Store return URL and email page URL in Vercel KV with 10 minute expiration
   const state = require('crypto').randomBytes(16).toString('hex');
-  if (!global.garage61StateStore) global.garage61StateStore = new Map();
-  global.garage61StateStore.set(state, { returnUrl, emailPageUrl, createdAt: Date.now() });
-  setTimeout(() => global.garage61StateStore.delete(state), 10 * 60 * 1000);
+  await kv.set(`garage61:state:${state}`, { returnUrl, emailPageUrl, createdAt: Date.now() }, { ex: 600 });
 
   const url =
     'https://garage61.net/app/account/oauth' +
@@ -70,8 +82,7 @@ function handleStart(req, res) {
 async function handleCallback(req, res, code) {
   try {
     const state = req.query.state;
-    if (!global.garage61StateStore) global.garage61StateStore = new Map();
-    const stateData = global.garage61StateStore.get(state);
+    const stateData = await kv.get(`garage61:state:${state}`);
     const returnUrl = stateData?.returnUrl;
     const emailPageUrl = stateData?.emailPageUrl;
 
@@ -80,7 +91,7 @@ async function handleCallback(req, res, code) {
       return res.send(renderErrorPage('Session expired. Please try again.'));
     }
 
-    global.garage61StateStore.delete(state);
+    await kv.del(`garage61:state:${state}`);
 
     const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
@@ -123,12 +134,15 @@ async function handleCallback(req, res, code) {
     // Check if email is provided
     if (!garageUser.email) {
       // Generate temp token with user data for email collection
+      const crypto = require('crypto');
+      const csrfToken = crypto.randomBytes(16).toString('hex');
       const tempToken = jwt.sign(
         {
           garageUser,
           iRacingData,
           returnUrl,
           provider: 'garage61',
+          csrf: csrfToken,
         },
         process.env.TEMP_TOKEN_SECRET,
         { expiresIn: '10m' }
@@ -314,7 +328,7 @@ async function generateOutsetaToken(email) {
 async function handleCompleteRegistration(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const { tempToken, email, name } = body;
+    const { tempToken, email, name, csrf } = body;
 
     if (!tempToken || !email) {
       return res.status(400).json({ error: 'Missing tempToken or email' });
@@ -333,20 +347,46 @@ async function handleCompleteRegistration(req, res) {
       return res.status(400).json({ error: 'Invalid or expired token. Please try signing in again.' });
     }
 
+    // CSRF protection
+    if (!csrf || tokenData.csrf !== csrf) {
+      console.error('CSRF token mismatch');
+      return res.status(403).json({ error: 'Invalid request. Please try again.' });
+    }
+
+    // Validate and sanitize email
+    const sanitizedEmail = email.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!emailRegex.test(sanitizedEmail)) {
       return res.status(400).json({ error: 'Invalid email format' });
+    }
+    if (sanitizedEmail.length > 254) {
+      return res.status(400).json({ error: 'Email address is too long' });
+    }
+
+    // Validate and sanitize name
+    const sanitizedName = name.trim().replace(/\s+/g, ' '); // Normalize whitespace
+    if (sanitizedName.length < 2) {
+      return res.status(400).json({ error: 'Name must be at least 2 characters' });
+    }
+    if (sanitizedName.length > 100) {
+      return res.status(400).json({ error: 'Name must be less than 100 characters' });
+    }
+
+    // Prevent malicious input
+    const dangerousPattern = /<|>|javascript:|on\w+=/i;
+    if (dangerousPattern.test(sanitizedName) || dangerousPattern.test(sanitizedEmail)) {
+      return res.status(400).json({ error: 'Invalid characters in input' });
     }
 
     // Split name into first and last name
-    const nameParts = name.trim().split(/\s+/);
+    const nameParts = sanitizedName.split(/\s+/);
     const firstName = nameParts[0] || 'Garage61';
     const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'User';
 
     // Add email to garageUser data
     const garageUserWithEmail = {
       ...tokenData.garageUser,
-      email,
+      email: sanitizedEmail,
       given_name: firstName,
       family_name: lastName,
     };
