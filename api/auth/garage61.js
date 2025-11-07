@@ -40,14 +40,28 @@ function handleStart(req, res) {
     return res.status(500).send('Garage61 client ID not configured');
   }
 
+  const returnUrl = req.query.return_url;
+  const emailPageUrl = req.query.email_page_url;
+  
+  if (!returnUrl) {
+    return res.status(400).send('Missing return_url parameter');
+  }
+
   const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
+
+  // Store return URL and email page URL in a simple map (in production, use Redis)
+  const state = require('crypto').randomBytes(16).toString('hex');
+  if (!global.garage61StateStore) global.garage61StateStore = new Map();
+  global.garage61StateStore.set(state, { returnUrl, emailPageUrl, createdAt: Date.now() });
+  setTimeout(() => global.garage61StateStore.delete(state), 10 * 60 * 1000);
 
   const url =
     'https://garage61.net/app/account/oauth' +
     `?response_type=code` +
     `&client_id=${encodeURIComponent(process.env.GARAGE61_CLIENT_ID)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=email` ;
+    `&state=${encodeURIComponent(state)}` +
+    `&scope=email`;
 
   res.writeHead(302, { Location: url });
   res.end();
@@ -55,6 +69,19 @@ function handleStart(req, res) {
 
 async function handleCallback(req, res, code) {
   try {
+    const state = req.query.state;
+    if (!global.garage61StateStore) global.garage61StateStore = new Map();
+    const stateData = global.garage61StateStore.get(state);
+    const returnUrl = stateData?.returnUrl;
+    const emailPageUrl = stateData?.emailPageUrl;
+
+    if (!returnUrl) {
+      console.error('State not found for Garage61 OAuth');
+      return res.send(renderErrorPage('Session expired. Please try again.'));
+    }
+
+    global.garage61StateStore.delete(state);
+
     const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
     const tokenResponse = await axios.post(
@@ -89,7 +116,7 @@ async function handleCallback(req, res, code) {
       const existingUser = await findExistingUserByGarage61Id(garage61Id);
       if (existingUser) {
         const outsetaToken = await generateOutsetaToken(existingUser.Email);
-        return res.send(renderSuccessPage(outsetaToken));
+        return res.send(renderSuccessPage(outsetaToken, returnUrl));
       }
     }
 
@@ -100,22 +127,22 @@ async function handleCallback(req, res, code) {
         {
           garageUser,
           iRacingData,
+          returnUrl,
           provider: 'garage61',
         },
         process.env.TEMP_TOKEN_SECRET,
         { expiresIn: '10m' }
       );
 
-      // Redirect to Framer page for email collection
-      const framerEmailPage = process.env.FRAMER_EMAIL_PAGE_URL || 'https://aware-amount-178968.framer.app/link-email';
-      return res.send(renderRedirectToFramer(framerEmailPage, tempToken));
+      // Redirect to Framer email collection page
+      return res.send(renderRedirectToFramer(emailPageUrl, tempToken));
     }
 
     const outsetaPerson = await findOrCreateOutsetaUser(garageUser, iRacingData);
 
     const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
 
-    return res.send(renderSuccessPage(outsetaToken));
+    return res.send(renderSuccessPage(outsetaToken, returnUrl));
   } catch (err) {
     dumpError('[Garage61SSO]', err);
     return res.send(renderErrorPage('Unable to complete Garage61 sign in.'));
@@ -306,6 +333,11 @@ async function handleCompleteRegistration(req, res) {
       return res.status(400).json({ error: 'Invalid or expired token. Please try signing in again.' });
     }
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
     // Split name into first and last name
     const nameParts = name.trim().split(/\s+/);
     const firstName = nameParts[0] || 'Garage61';
@@ -325,8 +357,11 @@ async function handleCompleteRegistration(req, res) {
     // Generate Outseta token
     const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
 
-    // Return JSON with token for EmailFormHandler to send via postMessage
-    return res.status(200).json({ success: true, outsetaToken });
+    return res.status(200).json({ 
+      success: true, 
+      outsetaToken,
+      returnUrl: tokenData.returnUrl 
+    });
   } catch (err) {
     dumpError('[Garage61SSO] complete-registration', err);
     return res.status(500).json({ error: 'Unable to complete registration' });
@@ -344,13 +379,13 @@ function renderRedirectToFramer(framerUrl, tempToken) {
     <script>
       const baseUrl = ${JSON.stringify(framerUrl)};
       const separator = baseUrl.includes('?') ? '&' : '?';
-      window.location.href = baseUrl + separator + 'popup=true#token=' + ${JSON.stringify(tempToken)};
+      window.location.href = baseUrl + separator + 'popup=false#token=' + ${JSON.stringify(tempToken)};
     </script>
   </body>
 </html>`;
 }
 
-function renderSuccessPage(token) {
+function renderSuccessPage(token, returnUrl) {
   return `<!DOCTYPE html>
 <html>
   <head>
@@ -361,10 +396,11 @@ function renderSuccessPage(token) {
     <script>
       (function() {
         const token = ${JSON.stringify(token)};
-        if (window.opener) {
-          window.opener.postMessage({ type: 'GARAGE61_AUTH_SUCCESS', token }, '*');
-        }
-        window.close();
+        const returnUrl = ${JSON.stringify(returnUrl)};
+        
+        const url = new URL(returnUrl);
+        url.hash = 'garage61_token=' + token;
+        window.location.href = url.toString();
       })();
     </script>
   </body>
@@ -380,14 +416,12 @@ function renderErrorPage(message) {
     <style>
       body { background-color: #0a0a0a; margin: 0; font-family: serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
       p, h1 { color: rgba(255, 255, 255, 0.8); }
-      button { background-color: rgba(255, 255, 255, 0.1); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; cursor: pointer; }
     </style>
   </head>
   <body>
     <div style="text-align:center;">
       <h1>Sign in failed</h1>
       <p>${message}</p>
-      <button onclick="window.close()" style="padding: 10px 20px;">Close</button>
     </div>
   </body>
 </html>`;
