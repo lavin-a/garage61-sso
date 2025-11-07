@@ -75,21 +75,12 @@ async function handleCallback(req, res, code) {
     });
 
     const garageUser = userResponse.data;
-    console.log('Garage61 user:', garageUser.email);
 
     const iRacingData = await fetchGarage61IRacing(accessToken);
 
     const outsetaPerson = await findOrCreateOutsetaUser(garageUser, iRacingData);
-    console.log('Outseta person UID:', outsetaPerson.Uid, 'Account UID:', outsetaPerson.Account?.Uid);
 
     const outsetaToken = await generateOutsetaToken(outsetaPerson.Email);
-
-    console.log('[Garage61SSO]', JSON.stringify({
-      email: outsetaPerson.Email,
-      uid: outsetaPerson.Uid,
-      accountUid: outsetaPerson.Account?.Uid || null,
-      hasIRacing: Boolean(iRacingData),
-    }));
 
     return res.send(renderSuccessPage(outsetaToken));
   } catch (err) {
@@ -208,8 +199,6 @@ async function findOrCreateOutsetaUser(garageUser, iRacingData) {
     ],
   };
 
-  console.log('Creating Outseta account via /crm/registrations');
-
   const createResponse = await axios.post(
     `${apiBase}/crm/registrations`,
     createPayload,
@@ -221,8 +210,6 @@ async function findOrCreateOutsetaUser(garageUser, iRacingData) {
       timeout: 8000,
     }
   );
-
-  console.log('Account created:', createResponse.data.Uid, 'Person:', createResponse.data.PrimaryContact?.Uid);
 
   return createResponse.data.PrimaryContact;
 }
@@ -248,25 +235,16 @@ function renderSuccessPage(token) {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Garage61 Sign In</title>
-    <style>
-      body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
-      button { padding: 12px 24px; background: #111; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
-    </style>
+    <title>Signing in...</title>
   </head>
   <body>
-    <div style="text-align:center;">
-      <h1>Signed in with Garage61</h1>
-      <p>You can close this window.</p>
-      <button onclick="window.close()">Close</button>
-    </div>
     <script>
       (function() {
         const token = ${JSON.stringify(token)};
         if (window.opener) {
           window.opener.postMessage({ type: 'GARAGE61_AUTH_SUCCESS', token }, '*');
         }
-        setTimeout(() => window.close(), 1200);
+        window.close();
       })();
     </script>
   </body>
