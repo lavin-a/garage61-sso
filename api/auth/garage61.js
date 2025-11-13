@@ -90,13 +90,16 @@ module.exports = async (req, res) => {
 
   const { code, action } = req.query;
 
-  // Handle complete-registration endpoint (POST)
-  if (req.method === 'POST' && action === 'complete-registration') {
-    return handleCompleteRegistration(req, res);
-  }
-
-  if (req.method === 'POST' && action === 'disconnect') {
-    return handleDisconnect(req, res);
+  if (req.method === 'POST') {
+    if (action === 'complete-registration') {
+      return handleCompleteRegistration(req, res);
+    }
+    if (action === 'send-password-reset') {
+      return handleSendPasswordReset(req, res);
+    }
+    if (action === 'disconnect') {
+      return handleDisconnect(req, res);
+    }
   }
 
   if (!code) {
@@ -817,7 +820,54 @@ function hasPassword(person) {
 
   if (person.PasswordMustChange === true) return false;
   if (person.HasPassword === true) return true;
-  if (person.PasswordMustChange === false && person.HasLoggedIn) return true;
 
   return false;
+}
+
+async function handleSendPasswordReset(req, res) {
+  try {
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
+      return res.status(401).json({ error: 'Missing authorization bearer token.' });
+    }
+
+    const accessToken = authHeader.slice(7).trim();
+    if (!accessToken) {
+      return res.status(401).json({ error: 'Missing authorization bearer token.' });
+    }
+
+    const profile = await verifyOutsetaAccessToken(accessToken);
+    if (!profile?.Uid) {
+      return res.status(403).json({ error: 'Unable to validate session.' });
+    }
+
+    const person = await getPersonByUid(profile.Uid);
+    if (!person?.Email) {
+      return res.status(400).json({ error: 'No email found for this account.' });
+    }
+
+    await sendPasswordResetEmail(person.Email);
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    dumpError('[Garage61SSO][password-reset]', err);
+    return res.status(500).json({ error: 'Unable to send password email. Please try again later.' });
+  }
+}
+
+async function sendPasswordResetEmail(email) {
+  const apiBase = getOutsetaApiBase();
+  const config = {
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+    params: {
+      donotlog: 1,
+    },
+  };
+
+  await axios.post(
+    `${apiBase}/crm/people/forgotPassword`,
+    { Email: email },
+    config
+  );
 }
