@@ -163,7 +163,7 @@ async function handleStart(req, res) {
     `&client_id=${encodeURIComponent(process.env.GARAGE61_CLIENT_ID)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&state=${encodeURIComponent(state)}` +
-    `&scope=email`;
+    `&scope=${encodeURIComponent('email datapacks_subscriptions driving_data')}`;
 
   res.writeHead(302, { Location: url });
   res.end();
@@ -202,6 +202,11 @@ async function handleCallback(req, res, code) {
       }
     );
 
+    // 🔍 TEMPORARY: Log the token response to see what Garage61 provides
+    console.log('=== GARAGE61 TOKEN RESPONSE ===');
+    console.log(JSON.stringify(tokenResponse.data, null, 2));
+    console.log('=== END TOKEN RESPONSE ===');
+
     const accessToken = tokenResponse.data.access_token;
 
     const userResponse = await axios.get('https://garage61.net/api/oauth/userinfo', {
@@ -229,6 +234,10 @@ async function handleCallback(req, res, code) {
           );
         }
 
+        // Subscribe to Garage61 data packs after successful linking
+        const isPro = isProUser(existingByGarageId);
+        await subscribeToGarage61DataPacks(accessToken, isPro);
+
         return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
       }
 
@@ -247,6 +256,11 @@ async function handleCallback(req, res, code) {
       }
 
       await updatePerson(linkPersonUid, buildGarage61UpdatePayload(person, garageUser, iRacingData));
+      
+      // Subscribe to Garage61 data packs after successful linking
+      const isPro = isProUser(person);
+      await subscribeToGarage61DataPacks(accessToken, isPro);
+      
       return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
     }
 
@@ -263,6 +277,10 @@ async function handleCallback(req, res, code) {
         iRacingData,
         email: normalizedEmail,
       });
+
+      // Subscribe to Garage61 data packs after successful account creation
+      const isPro = isProUser(createdPerson);
+      await subscribeToGarage61DataPacks(accessToken, isPro);
 
       const outsetaToken = await generateOutsetaToken(createdPerson.Email);
       return res.send(renderSuccessPage(outsetaToken, returnUrl));
@@ -312,6 +330,93 @@ async function fetchGarage61iRacing(accessToken) {
     console.warn('Garage61 linked accounts unavailable:', err.response?.status || err.message);
     return null;
   }
+}
+
+async function subscribeToGarage61DataPacks(accessToken, isPro = false) {
+  // TODO: Enable this once Garage61 data packs are live
+  console.log('[Garage61] Data pack subscription skipped (feature not yet live)');
+  console.log(`[Garage61] Would subscribe user (isPro: ${isPro}) to data packs`);
+  return true;
+
+  // eslint-disable-next-line no-unreachable
+  const FREE_DATA_PACK_GROUP_ID = process.env.GARAGE61_FREE_DATA_PACK_GROUP_ID || '1';
+  const PRO_DATA_PACK_GROUP_ID = process.env.GARAGE61_PRO_DATA_PACK_GROUP_ID || '2';
+
+  try {
+    // Always subscribe to Free data pack group
+    await axios.post(
+      'https://garage61.net/api/v1/createUserDataPackGroup',
+      {
+        userDataPackGroupId: FREE_DATA_PACK_GROUP_ID,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        timeout: 8000,
+      }
+    );
+
+    console.log('Successfully subscribed user to Free Garage61 data pack group');
+
+    // If Pro user, also subscribe to Pro data pack group
+    if (isPro) {
+      await axios.post(
+        'https://garage61.net/api/v1/createUserDataPackGroup',
+        {
+          userDataPackGroupId: PRO_DATA_PACK_GROUP_ID,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          timeout: 8000,
+        }
+      );
+
+      console.log('Successfully subscribed user to Pro Garage61 data pack group');
+    }
+  } catch (err) {
+    // Log but don't fail the authentication flow if data pack subscription fails
+    console.warn('Failed to subscribe to Garage61 data pack groups:', err.response?.status || err.message);
+    if (err.response?.data) {
+      console.warn('Garage61 data pack error details:', err.response.data);
+    }
+  }
+}
+
+function isProUser(person) {
+  if (!person) return false;
+
+  // Pro plan UIDs from Outseta
+  const PRO_PLAN_UIDS = [
+    'aWxroqQV', // Gold
+    'z9MzwKW4', // Gold Membership Add-on
+  ];
+
+  // Check if user has any Pro plan in their subscriptions
+  const subscriptions = person.Account?.Subscriptions || [];
+  
+  for (const subscription of subscriptions) {
+    // Check main plan
+    if (subscription.Plan?.Uid && PRO_PLAN_UIDS.includes(subscription.Plan.Uid)) {
+      return true;
+    }
+    
+    // Check add-ons
+    const addOns = subscription.AddOns || [];
+    for (const addOn of addOns) {
+      if (addOn.Plan?.Uid && PRO_PLAN_UIDS.includes(addOn.Plan.Uid)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function buildGarage61UpdatePayload(person, garageUser, iRacingData) {
