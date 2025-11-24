@@ -264,6 +264,19 @@ async function handleCallback(req, res, code) {
     if (normalizedEmail) {
       const existingByEmail = await findPersonByEmail(normalizedEmail);
       if (existingByEmail) {
+        const existingGarageId = existingByEmail.Garage61Id
+          ? String(existingByEmail.Garage61Id).trim()
+          : null;
+        const newGarageId = garage61Id ? String(garage61Id).trim() : null;
+        const garageMatches =
+          !existingGarageId || (newGarageId && existingGarageId === newGarageId);
+
+        if (!garageMatches) {
+          return res.send(
+            renderRedirectWithError(returnUrl, 'account_exists', ACCOUNT_CONFLICT_MESSAGE, 'garage61')
+          );
+        }
+
         const hasAccount = personHasAccount(existingByEmail);
         if (!hasAccount) {
           const ensured = await ensurePersonHasAccount(existingByEmail.Email, existingByEmail);
@@ -571,16 +584,31 @@ async function handleCompleteRegistration(req, res) {
     const garageSub = tokenData.garageUser?.sub ? String(tokenData.garageUser.sub) : '';
     const existingByEmail = await findPersonByEmail(sanitizedEmail);
     if (existingByEmail) {
-      if (
-        existingByEmail.Garage61Id &&
-        String(existingByEmail.Garage61Id) === garageSub
-      ) {
-        const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
-        return res.status(200).json({
-          success: true,
-          outsetaToken,
-          returnUrl: tokenData.returnUrl,
-        });
+      const existingGarageId = existingByEmail.Garage61Id
+        ? String(existingByEmail.Garage61Id)
+        : null;
+
+      const garageMatches =
+        !existingGarageId ||
+        (garageSub && existingGarageId === garageSub);
+
+      if (garageMatches && !personHasAccount(existingByEmail)) {
+        const ensured = await ensurePersonHasAccount(existingByEmail.Email, existingByEmail);
+        if (ensured) {
+          const updatePayload = buildGarage61UpdatePayload(
+            existingByEmail,
+            tokenData.garageUser,
+            tokenData.iRacingData
+          );
+          await updatePerson(existingByEmail.Uid, updatePayload);
+
+          const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
+          return res.status(200).json({
+            success: true,
+            outsetaToken,
+            returnUrl: tokenData.returnUrl,
+          });
+        }
       }
 
       return res.status(409).json({ error: ACCOUNT_CONFLICT_MESSAGE });
