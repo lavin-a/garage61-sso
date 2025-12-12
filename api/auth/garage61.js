@@ -1,7 +1,68 @@
-const axios = require('axios');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { kv } = require('@vercel/kv');
+const DEFAULT_TIMEOUT_MS = 8000;
+
+async function request(method, url, { headers = {}, params, data, timeout = DEFAULT_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const targetUrl = params ? appendQuery(url, params) : url;
+    const normalizedHeaders = {
+      Accept: 'application/json',
+      ...headers,
+    };
+
+    let body = undefined;
+    if (data !== undefined) {
+      if (data instanceof URLSearchParams) {
+        body = data.toString();
+        normalizedHeaders['Content-Type'] = normalizedHeaders['Content-Type'] || 'application/x-www-form-urlencoded';
+      } else if (typeof data === 'string') {
+        body = data;
+      } else {
+        body = JSON.stringify(data);
+        normalizedHeaders['Content-Type'] = normalizedHeaders['Content-Type'] || 'application/json';
+      }
+    }
+
+    const res = await fetch(targetUrl, {
+      method,
+      headers: normalizedHeaders,
+      body,
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    let parsed;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch (err) {
+      parsed = text;
+    }
+
+    if (!res.ok) {
+      const error = new Error(`HTTP ${res.status} ${res.statusText}`);
+      error.response = { status: res.status, statusText: res.statusText, data: parsed, headers: Object.fromEntries(res.headers.entries()) };
+      error.status = res.status;
+      throw error;
+    }
+
+    return { status: res.status, data: parsed, headers: Object.fromEntries(res.headers.entries()) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function appendQuery(url, params) {
+  const target = new URL(url);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    target.searchParams.set(key, value);
+  });
+  return target.toString();
+}
 
 const allowedOrigins = [
   'https://almeidaracingacademy.com',
@@ -180,20 +241,17 @@ async function handleCallback(req, res, code) {
 
     const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
-    const tokenResponse = await axios.post(
-      'https://garage61.net/api/oauth/token',
-      new URLSearchParams({
+    const tokenResponse = await request('POST', 'https://garage61.net/api/oauth/token', {
+      data: new URLSearchParams({
         grant_type: 'authorization_code',
         code,
         client_id: process.env.GARAGE61_CLIENT_ID,
         client_secret: process.env.GARAGE61_CLIENT_SECRET,
         redirect_uri: redirectUri,
       }),
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: 8000,
-      }
-    );
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 8000,
+    });
 
     // 🔍 TEMPORARY: Log the token response to see what Garage61 provides
     console.log('=== GARAGE61 TOKEN RESPONSE ===');
@@ -202,7 +260,7 @@ async function handleCallback(req, res, code) {
 
     const accessToken = tokenResponse.data.access_token;
 
-    const userResponse = await axios.get('https://garage61.net/api/oauth/userinfo', {
+    const userResponse = await request('GET', 'https://garage61.net/api/oauth/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 8000,
     });
@@ -323,7 +381,7 @@ async function handleCallback(req, res, code) {
 
 async function fetchGarage61iRacing(accessToken) {
   try {
-    const response = await axios.get('https://garage61.net/api/v1/me/accounts', {
+    const response = await request('GET', 'https://garage61.net/api/v1/me/accounts', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
@@ -359,39 +417,33 @@ async function subscribeToGarage61DataPacks(accessToken, isPro = false) {
 
   try {
     // Always subscribe to Free data pack group
-    await axios.post(
-      'https://garage61.net/api/v1/createUserDataPackGroup',
-      {
+    await request('POST', 'https://garage61.net/api/v1/createUserDataPackGroup', {
+      data: {
         userDataPackGroupId: FREE_DATA_PACK_GROUP_ID,
       },
-      {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 8000,
+    });
+
+    console.log('Successfully subscribed user to Free Garage61 data pack group');
+
+    // If Pro user, also subscribe to Pro data pack group
+    if (isPro) {
+      await request('POST', 'https://garage61.net/api/v1/createUserDataPackGroup', {
+        data: {
+          userDataPackGroupId: PRO_DATA_PACK_GROUP_ID,
+        },
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
         timeout: 8000,
-      }
-    );
-
-    console.log('Successfully subscribed user to Free Garage61 data pack group');
-
-    // If Pro user, also subscribe to Pro data pack group
-    if (isPro) {
-      await axios.post(
-        'https://garage61.net/api/v1/createUserDataPackGroup',
-        {
-          userDataPackGroupId: PRO_DATA_PACK_GROUP_ID,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          timeout: 8000,
-        }
-      );
+      });
 
       console.log('Successfully subscribed user to Pro Garage61 data pack group');
     }
@@ -503,14 +555,11 @@ async function generateOutsetaToken(email) {
   const authHeader = { Authorization: `Outseta ${process.env.OUTSETA_API_KEY}:${process.env.OUTSETA_SECRET_KEY}` };
 
   try {
-    const tokenResponse = await axios.post(
-      `${apiBase}/tokens`,
-      { username: email },
-      {
-        headers: { ...authHeader, 'Content-Type': 'application/json' },
-        timeout: 8000,
-      }
-    );
+    const tokenResponse = await request('POST', `${apiBase}/tokens`, {
+      data: { username: email },
+      headers: { ...authHeader, 'Content-Type': 'application/json' },
+      timeout: 8000,
+    });
 
     return tokenResponse.data.access_token || tokenResponse.data;
   } catch (error) {
@@ -777,7 +826,7 @@ async function verifyOutsetaAccessToken(token) {
 
   const apiBase = getOutsetaApiBase();
 
-  const response = await axios.get(`${apiBase}/profile`, {
+  const response = await request('GET', `${apiBase}/profile`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -791,7 +840,7 @@ async function getPersonByUid(uid) {
   if (!uid) return null;
 
   const apiBase = getOutsetaApiBase();
-  const response = await axios.get(`${apiBase}/crm/people/${uid}`, {
+  const response = await request('GET', `${apiBase}/crm/people/${uid}`, {
     headers: getOutsetaAuthHeaders(),
     timeout: 8000,
   });
@@ -803,7 +852,7 @@ async function findPersonByEmail(email) {
   if (!email) return null;
 
   const apiBase = getOutsetaApiBase();
-  const response = await axios.get(`${apiBase}/crm/people`, {
+  const response = await request('GET', `${apiBase}/crm/people`, {
     headers: getOutsetaAuthHeaders(),
     params: {
       Email: email,
@@ -819,7 +868,7 @@ async function findPersonByField(field, value) {
   if (!field || value == null) return null;
 
   const apiBase = getOutsetaApiBase();
-  const response = await axios.get(`${apiBase}/crm/people`, {
+  const response = await request('GET', `${apiBase}/crm/people`, {
     headers: getOutsetaAuthHeaders(),
     params: { [field]: value },
     timeout: 8000,
@@ -832,7 +881,8 @@ async function updatePerson(uid, payload) {
   if (!uid) throw new Error('Cannot update person without UID');
 
   const apiBase = getOutsetaApiBase();
-  await axios.put(`${apiBase}/crm/people/${uid}`, payload, {
+  await request('PUT', `${apiBase}/crm/people/${uid}`, {
+    data: payload,
     headers: getOutsetaAuthHeaders(),
     timeout: 8000,
   });
@@ -840,7 +890,8 @@ async function updatePerson(uid, payload) {
 
 async function createRegistration(payload) {
   const apiBase = getOutsetaApiBase();
-  const response = await axios.post(`${apiBase}/crm/registrations`, payload, {
+  const response = await request('POST', `${apiBase}/crm/registrations`, {
+    data: payload,
     headers: getOutsetaAuthHeaders(),
     timeout: 8000,
   });
@@ -1013,11 +1064,12 @@ async function sendPasswordResetEmail(email) {
     },
   };
 
-  await axios.post(
-    `${apiBase}/crm/people/forgotPassword`,
-    { Email: email },
-    config
-  );
+  await request('POST', `${apiBase}/crm/people/forgotPassword`, {
+    data: { Email: email },
+    headers: config.headers,
+    params: config.params,
+    timeout: config.timeout,
+  });
 }
 
 function isInvalidGrantError(error) {
@@ -1054,9 +1106,8 @@ async function createAccountForPerson(person) {
 
   const accountName = buildAccountName(person);
 
-  await axios.post(
-    `${apiBase}/crm/accounts`,
-    {
+  await request('POST', `${apiBase}/crm/accounts`, {
+    data: {
       Name: accountName,
       PersonAccount: [
         {
@@ -1071,11 +1122,9 @@ async function createAccountForPerson(person) {
         },
       ],
     },
-    {
-      headers: getOutsetaAuthHeaders(),
-      timeout: 8000,
-    }
-  );
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+  });
 }
 
 function buildAccountName(person) {
