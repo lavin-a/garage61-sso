@@ -253,12 +253,8 @@ async function handleCallback(req, res, code) {
       timeout: 8000,
     });
 
-    // 🔍 TEMPORARY: Log the token response to see what Garage61 provides
-    console.log('=== GARAGE61 TOKEN RESPONSE ===');
-    console.log(JSON.stringify(tokenResponse.data, null, 2));
-    console.log('=== END TOKEN RESPONSE ===');
-
-    const accessToken = tokenResponse.data.access_token;
+    const garage61TokenData = tokenResponse.data;
+    const accessToken = garage61TokenData.access_token;
 
     const userResponse = await request('GET', 'https://garage61.net/api/oauth/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -285,11 +281,19 @@ async function handleCallback(req, res, code) {
           );
         }
 
-        // Subscribe to Garage61 data packs after successful linking
-        const isPro = isProUser(existingByGarageId);
-        await subscribeToGarage61DataPacks(accessToken, isPro);
+        // Store Garage61 tokens to Outseta Account for Discord bot sync
+        const linkAccountUid = getAccountUidFromPerson(existingByGarageId);
+        if (linkAccountUid) {
+          await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
+        }
 
         return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
+      }
+
+      // Store Garage61 tokens to Outseta Account for Discord bot sync
+      const accountUid = getAccountUidFromPerson(existingByGarageId);
+      if (accountUid) {
+        await storeGarage61TokensToAccount(accountUid, garage61TokenData);
       }
 
       const outsetaToken = await generateOutsetaToken(existingByGarageId.Email);
@@ -308,9 +312,11 @@ async function handleCallback(req, res, code) {
 
       await updatePerson(linkPersonUid, buildGarage61UpdatePayload(person, garageUser, iRacingData));
       
-      // Subscribe to Garage61 data packs after successful linking
-      const isPro = isProUser(person);
-      await subscribeToGarage61DataPacks(accessToken, isPro);
+      // Store Garage61 tokens to Outseta Account for Discord bot sync
+      const linkAccountUid = getAccountUidFromPerson(person);
+      if (linkAccountUid) {
+        await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
+      }
       
       return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
     }
@@ -336,6 +342,14 @@ async function handleCallback(req, res, code) {
           const ensured = await ensurePersonHasAccount(existingByEmail.Email, existingByEmail);
           if (ensured) {
             await updatePerson(existingByEmail.Uid, buildGarage61UpdatePayload(existingByEmail, garageUser, iRacingData));
+            
+            // Re-fetch person to get new Account UID after account creation
+            const updatedPerson = await findPersonByEmail(existingByEmail.Email);
+            const accountUid = getAccountUidFromPerson(updatedPerson);
+            if (accountUid) {
+              await storeGarage61TokensToAccount(accountUid, garage61TokenData);
+            }
+            
             const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
             return res.send(renderSuccessPage(outsetaToken, returnUrl));
           }
@@ -351,9 +365,12 @@ async function handleCallback(req, res, code) {
         email: normalizedEmail,
       });
 
-      // Subscribe to Garage61 data packs after successful account creation
-      const isPro = isProUser(createdPerson);
-      await subscribeToGarage61DataPacks(accessToken, isPro);
+      // Fetch the created person to get Account UID for token storage
+      const fetchedPerson = await findPersonByEmail(createdPerson.Email);
+      const newAccountUid = getAccountUidFromPerson(fetchedPerson);
+      if (newAccountUid) {
+        await storeGarage61TokensToAccount(newAccountUid, garage61TokenData);
+      }
 
       const outsetaToken = await generateOutsetaToken(createdPerson.Email);
       return res.send(renderSuccessPage(outsetaToken, returnUrl));
@@ -367,6 +384,12 @@ async function handleCallback(req, res, code) {
         returnUrl,
         provider: 'garage61',
         csrf: csrfToken,
+        // Include Garage61 OAuth tokens for storage after email registration
+        garage61Tokens: {
+          access_token: garage61TokenData.access_token,
+          refresh_token: garage61TokenData.refresh_token,
+          expires_in: garage61TokenData.expires_in,
+        },
       },
       process.env.TEMP_TOKEN_SECRET,
       { expiresIn: '10m' }
@@ -403,87 +426,6 @@ async function fetchGarage61iRacing(accessToken) {
     console.warn('Garage61 linked accounts unavailable:', err.response?.status || err.message);
     return null;
   }
-}
-
-async function subscribeToGarage61DataPacks(accessToken, isPro = false) {
-  // TODO: Enable this once Garage61 data packs are live
-  console.log('[Garage61] Data pack subscription skipped (feature not yet live)');
-  console.log(`[Garage61] Would subscribe user (isPro: ${isPro}) to data packs`);
-  return true;
-
-  // eslint-disable-next-line no-unreachable
-  const FREE_DATA_PACK_GROUP_ID = process.env.GARAGE61_FREE_DATA_PACK_GROUP_ID || '1';
-  const PRO_DATA_PACK_GROUP_ID = process.env.GARAGE61_PRO_DATA_PACK_GROUP_ID || '2';
-
-  try {
-    // Always subscribe to Free data pack group
-    await request('POST', 'https://garage61.net/api/v1/createUserDataPackGroup', {
-      data: {
-        userDataPackGroupId: FREE_DATA_PACK_GROUP_ID,
-      },
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      timeout: 8000,
-    });
-
-    console.log('Successfully subscribed user to Free Garage61 data pack group');
-
-    // If Pro user, also subscribe to Pro data pack group
-    if (isPro) {
-      await request('POST', 'https://garage61.net/api/v1/createUserDataPackGroup', {
-        data: {
-          userDataPackGroupId: PRO_DATA_PACK_GROUP_ID,
-        },
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        timeout: 8000,
-      });
-
-      console.log('Successfully subscribed user to Pro Garage61 data pack group');
-    }
-  } catch (err) {
-    // Log but don't fail the authentication flow if data pack subscription fails
-    console.warn('Failed to subscribe to Garage61 data pack groups:', err.response?.status || err.message);
-    if (err.response?.data) {
-      console.warn('Garage61 data pack error details:', err.response.data);
-    }
-  }
-}
-
-function isProUser(person) {
-  if (!person) return false;
-
-  // Pro plan UIDs from Outseta
-  const PRO_PLAN_UIDS = [
-    'aWxroqQV', // Gold
-    'z9MzwKW4', // Gold Membership Add-on
-  ];
-
-  // Check if user has any Pro plan in their subscriptions
-  const subscriptions = person.Account?.Subscriptions || [];
-  
-  for (const subscription of subscriptions) {
-    // Check main plan
-    if (subscription.Plan?.Uid && PRO_PLAN_UIDS.includes(subscription.Plan.Uid)) {
-      return true;
-    }
-    
-    // Check add-ons
-    const addOns = subscription.AddOns || [];
-    for (const addOn of addOns) {
-      if (addOn.Plan?.Uid && PRO_PLAN_UIDS.includes(addOn.Plan.Uid)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 function buildGarage61UpdatePayload(person, garageUser, iRacingData) {
@@ -647,6 +589,15 @@ async function handleCompleteRegistration(req, res) {
           );
           await updatePerson(existingByEmail.Uid, updatePayload);
 
+          // Store Garage61 tokens if available
+          if (tokenData.garage61Tokens) {
+            const updatedPerson = await findPersonByEmail(existingByEmail.Email);
+            const accountUid = getAccountUidFromPerson(updatedPerson);
+            if (accountUid) {
+              await storeGarage61TokensToAccount(accountUid, tokenData.garage61Tokens);
+            }
+          }
+
           const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
           return res.status(200).json({
             success: true,
@@ -675,6 +626,15 @@ async function handleCompleteRegistration(req, res) {
       iRacingData: tokenData.iRacingData,
       email: sanitizedEmail,
     });
+
+    // Store Garage61 tokens if available in the temp token
+    if (tokenData.garage61Tokens) {
+      const fetchedPerson = await findPersonByEmail(createdPerson.Email);
+      const accountUid = getAccountUidFromPerson(fetchedPerson);
+      if (accountUid) {
+        await storeGarage61TokensToAccount(accountUid, tokenData.garage61Tokens);
+      }
+    }
 
     const outsetaToken = await generateOutsetaToken(createdPerson.Email);
 
@@ -842,6 +802,9 @@ async function getPersonByUid(uid) {
   const apiBase = getOutsetaApiBase();
   const response = await request('GET', `${apiBase}/crm/people/${uid}`, {
     headers: getOutsetaAuthHeaders(),
+    params: {
+      fields: '*,PersonAccount.IsPrimary,PersonAccount.Account.Uid',
+    },
     timeout: 8000,
   });
 
@@ -856,7 +819,7 @@ async function findPersonByEmail(email) {
     headers: getOutsetaAuthHeaders(),
     params: {
       Email: email,
-      fields: 'Uid,Email,FirstName,LastName,PersonAccount.Account.Uid',
+      fields: 'Uid,Email,FirstName,LastName,PersonAccount.IsPrimary,PersonAccount.Account.Uid',
     },
     timeout: 8000,
   });
@@ -870,7 +833,10 @@ async function findPersonByField(field, value) {
   const apiBase = getOutsetaApiBase();
   const response = await request('GET', `${apiBase}/crm/people`, {
     headers: getOutsetaAuthHeaders(),
-    params: { [field]: value },
+    params: {
+      [field]: value,
+      fields: '*,PersonAccount.IsPrimary,PersonAccount.Account.Uid',
+    },
     timeout: 8000,
   });
 
@@ -886,6 +852,58 @@ async function updatePerson(uid, payload) {
     headers: getOutsetaAuthHeaders(),
     timeout: 8000,
   });
+}
+
+async function updateAccount(uid, payload) {
+  if (!uid) throw new Error('Cannot update account without UID');
+
+  const apiBase = getOutsetaApiBase();
+  await request('PUT', `${apiBase}/crm/accounts/${uid}`, {
+    data: payload,
+    headers: getOutsetaAuthHeaders(),
+    timeout: 8000,
+  });
+}
+
+/**
+ * Store Garage61 OAuth tokens to the Outseta Account for later use by the Discord bot.
+ * The bot uses these tokens to manage Garage61 data pack subscriptions.
+ * @param {string} accountUid - The Outseta Account UID
+ * @param {object} tokenResponse - The token response from Garage61 OAuth
+ * @param {string} tokenResponse.access_token - The access token
+ * @param {string} tokenResponse.refresh_token - The refresh token
+ * @param {number} tokenResponse.expires_in - Token expiry in seconds
+ */
+async function storeGarage61TokensToAccount(accountUid, tokenResponse) {
+  if (!accountUid || !tokenResponse) {
+    console.warn('[Garage61] Cannot store tokens - missing accountUid or tokenResponse');
+    return;
+  }
+
+  const { access_token, refresh_token, expires_in } = tokenResponse;
+  
+  if (!access_token || !refresh_token) {
+    console.warn('[Garage61] Cannot store tokens - missing access_token or refresh_token');
+    return;
+  }
+
+  // Calculate expiry timestamp as ISO string (Date field in Outseta)
+  const expiresAt = new Date(Date.now() + (expires_in || 3600) * 1000);
+
+  try {
+    await updateAccount(accountUid, {
+      Garage61AccessToken: access_token,
+      Garage61RefreshToken: refresh_token,
+      Garage61TokenExpiry: expiresAt.toISOString(),
+    });
+    console.log(`[Garage61] Successfully stored OAuth tokens for account ${accountUid}`);
+  } catch (err) {
+    // Log but don't fail the auth flow if token storage fails
+    console.error('[Garage61] Failed to store OAuth tokens to Outseta:', err.message);
+    if (err.response?.data) {
+      console.error('[Garage61] Token storage error details:', err.response.data);
+    }
+  }
 }
 
 async function createRegistration(payload) {
@@ -984,6 +1002,22 @@ async function handleDisconnect(req, res) {
         Garage61Id: '',
         Garage61Username: '',
       });
+
+      // Clear Garage61 tokens from the Account
+      const accountUid = getAccountUidFromPerson(person);
+      if (accountUid) {
+        try {
+          await updateAccount(accountUid, {
+            Garage61AccessToken: '',
+            Garage61RefreshToken: '',
+            Garage61TokenExpiry: '',
+          });
+          console.log(`[Garage61] Cleared OAuth tokens for account ${accountUid}`);
+        } catch (err) {
+          // Log but don't fail disconnect if token clearing fails
+          console.warn('[Garage61] Failed to clear OAuth tokens:', err.message);
+        }
+      }
     }
 
     return res.status(200).json({
@@ -1138,4 +1172,21 @@ function buildAccountName(person) {
 function personHasAccount(person) {
   const memberships = Array.isArray(person?.PersonAccount) ? person.PersonAccount : [];
   return memberships.some((membership) => membership?.Account?.Uid);
+}
+
+/**
+ * Extract the Account UID from a person object.
+ * Accounts are linked via PersonAccount membership array.
+ */
+function getAccountUidFromPerson(person) {
+  if (!person) return null;
+  
+  const memberships = Array.isArray(person.PersonAccount) ? person.PersonAccount : [];
+  
+  // Find the primary account, or fall back to first account
+  const primary = memberships.find((m) => m?.IsPrimary && m?.Account?.Uid);
+  if (primary) return primary.Account.Uid;
+  
+  const first = memberships.find((m) => m?.Account?.Uid);
+  return first?.Account?.Uid || null;
 }

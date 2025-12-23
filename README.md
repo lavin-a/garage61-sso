@@ -28,11 +28,16 @@ You'll receive:
 
 In Outseta dashboard:
 1. Go to **CRM** → **Custom Properties**
-2. Add these custom fields (if not already present):
+2. Add these custom fields on **Person** (if not already present):
    - `Garage61Username` (Text)
    - `Garage61Id` (Text)
    - `iRacingUsername` (Text) - Auto-populated if user has iRacing linked to Garage61
    - `iRacingId` (Text) - Auto-populated if user has iRacing linked to Garage61
+
+3. Add these custom fields on **Account** (for Discord bot sync):
+   - `Garage61AccessToken` (Text) - Stores OAuth access token
+   - `Garage61RefreshToken` (Text) - Stores OAuth refresh token
+   - `Garage61TokenExpiry` (Date) - Stores token expiry timestamp
 
 ### 3. Deploy Backend to Vercel
 
@@ -75,6 +80,7 @@ OUTSETA_SECRET_KEY=your_secret_key
 - **Field Consistency**: Uses same field names as iRacing SSO (`iRacingUsername`, `iRacingId`) for compatibility
 - **Graceful Fallback**: Works perfectly even if iRacing data is not available
 - **Smart Updates**: Only updates fields that have changed to minimize API calls
+- **OAuth Token Storage**: Stores Garage61 access/refresh tokens to Outseta Account for Discord bot sync
 
 ## 🔄 OAuth Flow
 
@@ -98,14 +104,43 @@ OUTSETA_SECRET_KEY=your_secret_key
 4. Check browser console for logs
 5. Verify user created in Outseta dashboard
 
+## 🤖 Discord Bot Token Storage
+
+After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (not Person) for use by the Discord bot:
+
+| Outseta Account Field | Value |
+|-----------------------|-------|
+| `Garage61AccessToken` | The OAuth access token |
+| `Garage61RefreshToken` | The OAuth refresh token |
+| `Garage61TokenExpiry` | ISO timestamp when access token expires |
+
+**Why?** The Discord bot uses these tokens to:
+1. Check user's current Garage61 data pack subscriptions
+2. Subscribe/unsubscribe users based on their Outseta plan
+3. Auto-refresh expired tokens and write new tokens back to Outseta
+
+**Note:** Data pack subscription is handled entirely by the Discord bot - the OAuth flow only stores tokens.
+
+**Users only need to authenticate once** - the bot handles token refresh automatically.
+
+**Token Lifecycle:**
+- Stored on login, link, and new account creation
+- Cleared when user disconnects Garage61 from their account
+- Refreshed by Discord bot during sync operations
+
 ## 📝 Notes
 
 - **Garage61 API Endpoints**: The OAuth endpoints in this code (`https://auth.garage61.com`, `https://garage61.net/api/v1/`) are placeholders. Update them based on actual Garage61 API documentation.
 - **iRacing Data Source**: iRacing data is fetched from Garage61's `/v1/getAccounts` endpoint (see [API docs](https://garage61.net/developer/endpoints/v1/getAccounts))
 - **Scopes**: Adjust OAuth scopes based on what data you need from Garage61.
 - **Custom Fields**: The following fields are stored in Outseta:
-  - `Garage61Username` & `Garage61Id` - Always populated from Garage61
-  - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
+  - **Person-level:**
+    - `Garage61Username` & `Garage61Id` - Always populated from Garage61
+    - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
+  - **Account-level (for Discord bot):**
+    - `Garage61AccessToken` - OAuth access token
+    - `Garage61RefreshToken` - OAuth refresh token  
+    - `Garage61TokenExpiry` - Token expiry timestamp (Date field)
 - **Field Mapping**: 
   - `iRacingData.displayName` → `iRacingUsername` in Outseta
   - `iRacingData.custId` → `iRacingId` in Outseta
