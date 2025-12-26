@@ -135,8 +135,8 @@ After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (n
 - **Scopes**: Adjust OAuth scopes based on what data you need from Garage61.
 - **Custom Fields**: The following fields are stored in Outseta:
   - **Person-level:**
-    - `Garage61Username` & `Garage61Id` - Always populated from Garage61
-    - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
+  - `Garage61Username` & `Garage61Id` - Always populated from Garage61
+  - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
   - **Account-level (for Discord bot):**
     - `Garage61AccessToken` - OAuth access token
     - `Garage61RefreshToken` - OAuth refresh token  
