@@ -3,6 +3,38 @@ const jwt = require('jsonwebtoken');
 const { kv } = require('@vercel/kv');
 const DEFAULT_TIMEOUT_MS = 8000;
 
+/**
+ * Trigger immediate Garage61 data pack sync after OAuth.
+ * Fire-and-forget - doesn't block the auth flow.
+ */
+/**
+ * Trigger immediate Garage61 data pack sync after OAuth.
+ * Must be awaited in serverless environments to prevent premature termination.
+ */
+async function triggerDataPackSync(accountUid) {
+  const webhookUrl = process.env.BOT_WEBHOOK_URL;
+  const webhookSecret = process.env.BOT_WEBHOOK_SECRET;
+  
+  if (!webhookUrl || !webhookSecret) {
+    return;
+  }
+
+  try {
+    const response = await request('POST', `${webhookUrl}/api/sync-datapack`, {
+      headers: {
+        Authorization: `Bearer ${webhookSecret}`,
+        'Content-Type': 'application/json',
+      },
+      data: { accountUid },
+      timeout: 5000,
+    });
+    console.log(`[DataPackSync] Triggered for account ${accountUid}`);
+  } catch (err) {
+    // Log but don't fail the auth flow
+    console.warn(`[DataPackSync] Failed: ${err.message}`);
+  }
+}
+
 async function request(method, url, { headers = {}, params, data, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -897,6 +929,9 @@ async function storeGarage61TokensToAccount(accountUid, tokenResponse) {
       Garage61TokenExpiry: expiresAt.toISOString(),
     });
     console.log(`[Garage61] Successfully stored OAuth tokens for account ${accountUid}`);
+    
+    // Trigger immediate data pack sync
+    await triggerDataPackSync(accountUid);
   } catch (err) {
     // Log but don't fail the auth flow if token storage fails
     console.error('[Garage61] Failed to store OAuth tokens to Outseta:', err.message);
