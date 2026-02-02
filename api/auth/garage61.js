@@ -249,7 +249,7 @@ async function handleStart(req, res) {
     `&client_id=${encodeURIComponent(process.env.GARAGE61_CLIENT_ID)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&state=${encodeURIComponent(state)}` +
-    `&scope=${encodeURIComponent('email datapacks_subscriptions driving_data')}`;
+    `&scope=${encodeURIComponent('email datapacks_subscriptions driving_data analyses')}`;
 
   res.writeHead(302, { Location: url });
   res.end();
