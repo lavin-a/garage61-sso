@@ -237,6 +237,12 @@ async function handleStart(req, res) {
 
   // Store return URL and email page URL in Vercel KV with 10 minute expiration
   const state = crypto.randomBytes(16).toString('hex');
+  console.log('[Garage61SSO] storing OAuth state', {
+    key: `garage61:state:${state}`,
+    intent,
+    hasReturnUrl: Boolean(returnUrl),
+    createdAt: Date.now(),
+  });
   await kv.set(
     `garage61:state:${state}`,
     { returnUrl, emailPageUrl, intent, linkPersonUid, createdAt: Date.now() },
@@ -258,18 +264,31 @@ async function handleStart(req, res) {
 async function handleCallback(req, res, code) {
   try {
     const state = req.query.state;
-    const stateData = await kv.get(`garage61:state:${state}`);
+    console.log('[Garage61SSO] received OAuth state', { state });
+    const stateKey = `garage61:state:${state}`;
+    const usedKey = `garage61:state:used:${state}`;
+    const stateData = await kv.get(stateKey);
     const returnUrl = stateData?.returnUrl;
     const emailPageUrl = stateData?.emailPageUrl;
     const intent = (stateData?.intent || 'login').toLowerCase();
     const linkPersonUid = stateData?.linkPersonUid || null;
 
     if (!returnUrl) {
-      console.error('State not found for Garage61 OAuth');
+      const usedData = await kv.get(usedKey);
+      if (usedData?.returnUrl) {
+        if (usedData.mode === 'link') {
+          return res.send(renderLinkSuccessPage(usedData.returnUrl, 'garage61'));
+        }
+        return res.send(renderSuccessPage(usedData.outsetaToken || '', usedData.returnUrl));
+      }
+      console.error('State not found for Garage61 OAuth', { state });
       return res.send(renderErrorPage('Session expired. Please try again.'));
     }
 
-    await kv.del(`garage61:state:${state}`);
+    const finalizeSuccess = async (mode, token) => {
+      await kv.set(usedKey, { returnUrl, outsetaToken: token || '', mode }, { ex: 300 });
+      await kv.del(stateKey);
+    };
 
     const redirectUri = `${getBaseUrl(req)}/api/auth/garage61`;
 
@@ -319,6 +338,7 @@ async function handleCallback(req, res, code) {
           await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
         }
 
+        await finalizeSuccess('link');
         return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
       }
 
@@ -329,6 +349,7 @@ async function handleCallback(req, res, code) {
       }
 
       const outsetaToken = await generateOutsetaToken(existingByGarageId.Email);
+      await finalizeSuccess('login', outsetaToken);
       return res.send(renderSuccessPage(outsetaToken, returnUrl));
     }
 
@@ -350,6 +371,7 @@ async function handleCallback(req, res, code) {
         await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
       }
       
+      await finalizeSuccess('link');
       return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
     }
 
@@ -383,6 +405,7 @@ async function handleCallback(req, res, code) {
             }
             
             const outsetaToken = await generateOutsetaToken(existingByEmail.Email);
+            await finalizeSuccess('login', outsetaToken);
             return res.send(renderSuccessPage(outsetaToken, returnUrl));
           }
         }
@@ -405,6 +428,7 @@ async function handleCallback(req, res, code) {
       }
 
       const outsetaToken = await generateOutsetaToken(createdPerson.Email);
+      await finalizeSuccess('login', outsetaToken);
       return res.send(renderSuccessPage(outsetaToken, returnUrl));
     }
 
@@ -869,7 +893,7 @@ async function findPersonByField(field, value) {
       [field]: value,
       fields: '*,PersonAccount.IsPrimary,PersonAccount.Account.Uid',
     },
-    timeout: 8000,
+      timeout: 12000,
   });
 
   return response.data.items?.[0] ?? null;
@@ -1062,6 +1086,12 @@ async function handleDisconnect(req, res) {
     });
   } catch (err) {
     dumpError('[Garage61SSO][disconnect]', err);
+
+    // Surface expired / invalid token errors so the client can refresh and retry
+    if (err.status === 401 || err.response?.status === 401) {
+      return res.status(401).json({ error: 'Session expired. Please try again.', code: 'TOKEN_EXPIRED' });
+    }
+
     return res.status(500).json({ error: 'Unable to disconnect Garage61 at this time.' });
   }
 }
@@ -1119,6 +1149,11 @@ async function handleSendPasswordReset(req, res) {
     return res.status(200).json({ success: true });
   } catch (err) {
     dumpError('[Garage61SSO][password-reset]', err);
+
+    if (err.status === 401 || err.response?.status === 401) {
+      return res.status(401).json({ error: 'Session expired. Please try again.', code: 'TOKEN_EXPIRED' });
+    }
+
     return res.status(500).json({ error: 'Unable to send password email. Please try again later.' });
   }
 }
