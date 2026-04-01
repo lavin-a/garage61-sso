@@ -4,7 +4,7 @@
   "description": "Garage61 SSO integration with Outseta for Vercel",
   "main": "api/auth/garage61.js",
   "dependencies": {
-    "@vercel/kv": "^3.0.0",
+    "@upstash/redis": "^1.36.0",
     "jsonwebtoken": "^9.0.3"
   }
 }
