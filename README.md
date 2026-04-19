@@ -1,6 +1,6 @@
-# Garage61 SSO Integration
+# Garage 61 SSO Integration
 
-Secure OAuth integration between Garage61 and Outseta for the Almeida Racing Academy.
+Secure OAuth integration between Garage 61 and Outseta for the Almeida Racing Academy.
 
 ## 🏗️ Architecture
 
@@ -10,9 +10,9 @@ Secure OAuth integration between Garage61 and Outseta for the Almeida Racing Aca
 
 ## 📋 Setup Instructions
 
-### 1. Get Garage61 OAuth Credentials
+### 1. Get Garage 61 OAuth Credentials
 
-Contact Garage61 support to register your OAuth application:
+Contact Garage 61 support to register your OAuth application:
 - **Email**: support@garage61.com (adjust as needed)
 - **Required Info**:
   - Application Name: "Almeida Racing Academy"
@@ -31,8 +31,8 @@ In Outseta dashboard:
 2. Add these custom fields on **Person** (if not already present):
    - `Garage61Username` (Text)
    - `Garage61Id` (Text)
-   - `iRacingUsername` (Text) - Auto-populated if user has iRacing linked to Garage61
-   - `iRacingId` (Text) - Auto-populated if user has iRacing linked to Garage61
+   - `iRacingUsername` (Text) - Auto-populated if user has iRacing linked to Garage 61
+   - `iRacingId` (Text) - Auto-populated if user has iRacing linked to Garage 61
 
 3. Add these custom fields on **Account** (for Discord bot sync):
    - `Garage61AccessToken` (Text) - Stores OAuth access token
@@ -42,7 +42,7 @@ In Outseta dashboard:
 ### 3. Deploy Backend to Vercel
 
 ```bash
-cd "Garage61 SSO"
+cd "Garage 61 SSO"
 vercel
 ```
 
@@ -75,21 +75,21 @@ OUTSETA_SECRET_KEY=your_secret_key
 
 ## ✨ Features
 
-- **Unified Identity**: Automatically links Garage61, iRacing, and Outseta accounts
-- **iRacing Auto-Sync**: If user has iRacing linked to Garage61, their iRacing data is automatically synced to Outseta
+- **Unified Identity**: Automatically links Garage 61, iRacing, and Outseta accounts
+- **iRacing Auto-Sync**: If user has iRacing linked to Garage 61, their iRacing data is automatically synced to Outseta
 - **Field Consistency**: Uses same field names as iRacing SSO (`iRacingUsername`, `iRacingId`) for compatibility
 - **Graceful Fallback**: Works perfectly even if iRacing data is not available
 - **Smart Updates**: Only updates fields that have changed to minimize API calls
-- **OAuth Token Storage**: Stores Garage61 access/refresh tokens to Outseta Account for Discord bot sync
+- **OAuth Token Storage**: Stores Garage 61 access/refresh tokens to Outseta Account for Discord bot sync
 
 ## 🔄 OAuth Flow
 
-1. User clicks "Sign in with Garage61" button
-2. Popup opens to Garage61 authorization page
+1. User clicks "Sign in with Garage 61" button
+2. Popup opens to Garage 61 authorization page
 3. User approves access
-4. Garage61 redirects to callback with auth code
+4. Garage 61 redirects to callback with auth code
 5. Backend exchanges code for access token
-6. Backend fetches user profile from Garage61
+6. Backend fetches user profile from Garage 61
 7. Backend fetches connected accounts (checks for linked iRacing account)
 8. Backend creates/updates user in Outseta (includes iRacing data if available)
 9. Backend generates Outseta JWT token
@@ -106,7 +106,7 @@ OUTSETA_SECRET_KEY=your_secret_key
 
 ## 🤖 Discord Bot Token Storage
 
-After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (not Person) for use by the Discord bot:
+After successful OAuth, Garage 61 tokens are stored to the Outseta **Account** (not Person) for use by the Discord bot:
 
 | Outseta Account Field | Value |
 |-----------------------|-------|
@@ -115,7 +115,7 @@ After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (n
 | `Garage61TokenExpiry` | ISO timestamp when access token expires |
 
 **Why?** The Discord bot uses these tokens to:
-1. Check user's current Garage61 data pack subscriptions
+1. Check user's current Garage 61 data pack subscriptions
 2. Subscribe/unsubscribe users based on their Outseta plan
 3. Auto-refresh expired tokens and write new tokens back to Outseta
 
@@ -125,18 +125,18 @@ After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (n
 
 **Token Lifecycle:**
 - Stored on login, link, and new account creation
-- Cleared when user disconnects Garage61 from their account
+- Cleared when user disconnects Garage 61 from their account
 - Refreshed by Discord bot during sync operations
 
 ## 📝 Notes
 
-- **Garage61 API Endpoints**: The OAuth endpoints in this code (`https://auth.garage61.com`, `https://garage61.net/api/v1/`) are placeholders. Update them based on actual Garage61 API documentation.
-- **iRacing Data Source**: iRacing data is fetched from Garage61's `/v1/getAccounts` endpoint (see [API docs](https://garage61.net/developer/endpoints/v1/getAccounts))
-- **Scopes**: Adjust OAuth scopes based on what data you need from Garage61.
+- **Garage 61 API Endpoints**: The OAuth endpoints in this code (`https://auth.garage61.com`, `https://garage61.net/api/v1/`) are placeholders. Update them based on actual Garage 61 API documentation.
+- **iRacing Data Source**: iRacing data is fetched from Garage 61's `/v1/getAccounts` endpoint (see [API docs](https://garage61.net/developer/endpoints/v1/getAccounts))
+- **Scopes**: Adjust OAuth scopes based on what data you need from Garage 61.
 - **Custom Fields**: The following fields are stored in Outseta:
   - **Person-level:**
-  - `Garage61Username` & `Garage61Id` - Always populated from Garage61
-  - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage61
+  - `Garage61Username` & `Garage61Id` - Always populated from Garage 61
+  - `iRacingUsername` & `iRacingId` - Only populated if user has linked iRacing to Garage 61
   - **Account-level (for Discord bot):**
     - `Garage61AccessToken` - OAuth access token
     - `Garage61RefreshToken` - OAuth refresh token  
@@ -149,7 +149,7 @@ After successful OAuth, Garage61 tokens are stored to the Outseta **Account** (n
 
 **Popup blocked**: Enable popups for your site  
 **401 Unauthorized**: Check Outseta API credentials  
-**400 Bad Request**: Verify Garage61 OAuth credentials  
+**400 Bad Request**: Verify Garage 61 OAuth credentials  
 **Token not set**: Check CORS and origin validation  
 
 ## 📚 Related Files

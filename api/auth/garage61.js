@@ -8,11 +8,11 @@ const kv = new Redis({
 const DEFAULT_TIMEOUT_MS = 8000;
 
 /**
- * Trigger immediate Garage61 data pack sync after OAuth.
+ * Trigger immediate Garage 61 data pack sync after OAuth.
  * Fire-and-forget - doesn't block the auth flow.
  */
 /**
- * Trigger immediate Garage61 data pack sync after OAuth.
+ * Trigger immediate Garage 61 data pack sync after OAuth.
  * Must be awaited in serverless environments to prevent premature termination.
  */
 async function triggerDataPackSync(accountUid) {
@@ -201,7 +201,7 @@ module.exports = async (req, res) => {
 
 async function handleStart(req, res) {
   if (!process.env.GARAGE61_CLIENT_ID) {
-    return res.status(500).send('Garage61 client ID not configured');
+    return res.status(500).send('Garage 61 client ID not configured');
   }
 
   const intent = (req.query.intent || 'login').toLowerCase();
@@ -285,7 +285,7 @@ async function handleCallback(req, res, code) {
         }
         return res.send(renderSuccessPage(usedData.outsetaToken || '', usedData.returnUrl));
       }
-      console.error('State not found for Garage61 OAuth', { state });
+      console.error('State not found for Garage 61 OAuth', { state });
       return res.send(renderErrorPage('Session expired. Please try again.'));
     }
 
@@ -336,7 +336,7 @@ async function handleCallback(req, res, code) {
           );
         }
 
-        // Store Garage61 tokens to Outseta Account for Discord bot sync
+        // Store Garage 61 tokens to Outseta Account for Discord bot sync
         const linkAccountUid = getAccountUidFromPerson(existingByGarageId);
         if (linkAccountUid) {
           await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
@@ -346,7 +346,7 @@ async function handleCallback(req, res, code) {
         return res.send(renderLinkSuccessPage(returnUrl, 'garage61'));
       }
 
-      // Store Garage61 tokens to Outseta Account for Discord bot sync
+      // Store Garage 61 tokens to Outseta Account for Discord bot sync
       const accountUid = getAccountUidFromPerson(existingByGarageId);
       if (accountUid) {
         await storeGarage61TokensToAccount(accountUid, garage61TokenData);
@@ -369,7 +369,7 @@ async function handleCallback(req, res, code) {
 
       await updatePerson(linkPersonUid, buildGarage61UpdatePayload(person, garageUser, iRacingData));
       
-      // Store Garage61 tokens to Outseta Account for Discord bot sync
+      // Store Garage 61 tokens to Outseta Account for Discord bot sync
       const linkAccountUid = getAccountUidFromPerson(person);
       if (linkAccountUid) {
         await storeGarage61TokensToAccount(linkAccountUid, garage61TokenData);
@@ -444,7 +444,7 @@ async function handleCallback(req, res, code) {
         returnUrl,
         provider: 'garage61',
         csrf: csrfToken,
-        // Include Garage61 OAuth tokens for storage after email registration
+        // Include Garage 61 OAuth tokens for storage after email registration
         garage61Tokens: {
           access_token: garage61TokenData.access_token,
           refresh_token: garage61TokenData.refresh_token,
@@ -458,7 +458,7 @@ async function handleCallback(req, res, code) {
     return res.send(renderRedirectToFramer(emailPageUrl, tempToken));
   } catch (err) {
     dumpError('[Garage61SSO]', err);
-    return res.send(renderErrorPage('Unable to complete Garage61 sign in.'));
+    return res.send(renderErrorPage('Unable to complete Garage 61 sign in.'));
   }
 }
 
@@ -483,7 +483,7 @@ async function fetchGarage61iRacing(accessToken) {
       custId: account.id ? String(account.id) : '',
     };
   } catch (err) {
-    console.warn('Garage61 linked accounts unavailable:', err.response?.status || err.message);
+    console.warn('Garage 61 linked accounts unavailable:', err.response?.status || err.message);
     return null;
   }
 }
@@ -511,7 +511,7 @@ function buildGarage61UpdatePayload(person, garageUser, iRacingData) {
 }
 
 async function createGarage61OutsetaUser({ garageUser, iRacingData, email }) {
-  const firstName = garageUser.given_name || garageUser.name || 'Garage61';
+  const firstName = garageUser.given_name || garageUser.name || 'Garage 61';
   const lastName = garageUser.family_name || 'User';
   const garageUsername = garageUser.preferred_username || garageUser.name || '';
   const fullName = `${firstName} ${lastName}`.trim();
@@ -532,7 +532,7 @@ async function createGarage61OutsetaUser({ garageUser, iRacingData, email }) {
   }
 
   const registration = await createRegistration({
-    Name: fullName || 'Garage61 User',
+    Name: fullName || 'Garage 61 User',
     PersonAccount: [
       {
         IsPrimary: true,
@@ -649,7 +649,7 @@ async function handleCompleteRegistration(req, res) {
           );
           await updatePerson(existingByEmail.Uid, updatePayload);
 
-          // Store Garage61 tokens if available
+          // Store Garage 61 tokens if available
           if (tokenData.garage61Tokens) {
             const updatedPerson = await findPersonByEmail(existingByEmail.Email);
             const accountUid = getAccountUidFromPerson(updatedPerson);
@@ -671,7 +671,7 @@ async function handleCompleteRegistration(req, res) {
     }
 
     const nameParts = sanitizedName.split(/\s+/);
-    const firstName = nameParts[0] || 'Garage61';
+    const firstName = nameParts[0] || 'Garage 61';
     const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : 'User';
 
     const garageUserWithEmail = {
@@ -687,7 +687,7 @@ async function handleCompleteRegistration(req, res) {
       email: sanitizedEmail,
     });
 
-    // Store Garage61 tokens if available in the temp token
+    // Store Garage 61 tokens if available in the temp token
     if (tokenData.garage61Tokens) {
       const fetchedPerson = await findPersonByEmail(createdPerson.Email);
       const accountUid = getAccountUidFromPerson(fetchedPerson);
@@ -800,7 +800,7 @@ function renderErrorPage(message) {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Garage61 Sign In</title>
+    <title>Garage 61 Sign In</title>
     <style>
       body { background-color: #0a0a0a; margin: 0; font-family: serif; display: flex; align-items: center; justify-content: center; height: 100vh; }
       p, h1 { color: rgba(255, 255, 255, 0.8); }
@@ -926,24 +926,24 @@ async function updateAccount(uid, payload) {
 }
 
 /**
- * Store Garage61 OAuth tokens to the Outseta Account for later use by the Discord bot.
- * The bot uses these tokens to manage Garage61 data pack subscriptions.
+ * Store Garage 61 OAuth tokens to the Outseta Account for later use by the Discord bot.
+ * The bot uses these tokens to manage Garage 61 data pack subscriptions.
  * @param {string} accountUid - The Outseta Account UID
- * @param {object} tokenResponse - The token response from Garage61 OAuth
+ * @param {object} tokenResponse - The token response from Garage 61 OAuth
  * @param {string} tokenResponse.access_token - The access token
  * @param {string} tokenResponse.refresh_token - The refresh token
  * @param {number} tokenResponse.expires_in - Token expiry in seconds
  */
 async function storeGarage61TokensToAccount(accountUid, tokenResponse) {
   if (!accountUid || !tokenResponse) {
-    console.warn('[Garage61] Cannot store tokens - missing accountUid or tokenResponse');
+    console.warn('[Garage 61] Cannot store tokens - missing accountUid or tokenResponse');
     return;
   }
 
   const { access_token, refresh_token, expires_in } = tokenResponse;
   
   if (!access_token || !refresh_token) {
-    console.warn('[Garage61] Cannot store tokens - missing access_token or refresh_token');
+    console.warn('[Garage 61] Cannot store tokens - missing access_token or refresh_token');
     return;
   }
 
@@ -956,15 +956,15 @@ async function storeGarage61TokensToAccount(accountUid, tokenResponse) {
       Garage61RefreshToken: refresh_token,
       Garage61TokenExpiry: expiresAt.toISOString(),
     });
-    console.log(`[Garage61] Successfully stored OAuth tokens for account ${accountUid}`);
+    console.log(`[Garage 61] Successfully stored OAuth tokens for account ${accountUid}`);
     
     // Trigger immediate data pack sync
     await triggerDataPackSync(accountUid);
   } catch (err) {
     // Log but don't fail the auth flow if token storage fails
-    console.error('[Garage61] Failed to store OAuth tokens to Outseta:', err.message);
+    console.error('[Garage 61] Failed to store OAuth tokens to Outseta:', err.message);
     if (err.response?.data) {
-      console.error('[Garage61] Token storage error details:', err.response.data);
+      console.error('[Garage 61] Token storage error details:', err.response.data);
     }
   }
 }
@@ -1049,7 +1049,7 @@ async function handleDisconnect(req, res) {
 
     if (!hasPassword(person)) {
       return res.status(412).json({
-        error: 'Add a password to your account before disconnecting Garage61.',
+        error: 'Add a password to your account before disconnecting Garage 61.',
       });
     }
 
@@ -1066,7 +1066,7 @@ async function handleDisconnect(req, res) {
         Garage61Username: '',
       });
 
-      // Clear Garage61 tokens from the Account
+      // Clear Garage 61 tokens from the Account
       const accountUid = getAccountUidFromPerson(person);
       if (accountUid) {
         try {
@@ -1075,10 +1075,10 @@ async function handleDisconnect(req, res) {
             Garage61RefreshToken: '',
             Garage61TokenExpiry: '',
           });
-          console.log(`[Garage61] Cleared OAuth tokens for account ${accountUid}`);
+          console.log(`[Garage 61] Cleared OAuth tokens for account ${accountUid}`);
         } catch (err) {
           // Log but don't fail disconnect if token clearing fails
-          console.warn('[Garage61] Failed to clear OAuth tokens:', err.message);
+          console.warn('[Garage 61] Failed to clear OAuth tokens:', err.message);
         }
       }
     }
@@ -1096,7 +1096,7 @@ async function handleDisconnect(req, res) {
       return res.status(401).json({ error: 'Session expired. Please try again.', code: 'TOKEN_EXPIRED' });
     }
 
-    return res.status(500).json({ error: 'Unable to disconnect Garage61 at this time.' });
+    return res.status(500).json({ error: 'Unable to disconnect Garage 61 at this time.' });
   }
 }
 

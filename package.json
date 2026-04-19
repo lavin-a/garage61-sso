@@ -1,7 +1,7 @@
 {
   "name": "garage61-sso",
   "version": "1.0.0",
-  "description": "Garage61 SSO integration with Outseta for Vercel",
+  "description": "Garage 61 SSO integration with Outseta for Vercel",
   "main": "api/auth/garage61.js",
   "dependencies": {
     "@upstash/redis": "^1.36.0",

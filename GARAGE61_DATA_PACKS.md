@@ -1,22 +1,22 @@
-# Garage61 Data Pack Integration
+# Garage 61 Data Pack Integration
 
 ## Overview
 
-This integration automatically subscribes users to Garage61 data pack groups when they link their Garage61 account to ARA.
+This integration automatically subscribes users to Garage 61 data pack groups when they link their Garage 61 account to ARA.
 
 ## Implementation Details
 
 ### When Data Pack Subscription Occurs
 
-The system subscribes users to Garage61 data packs in the following scenarios:
+The system subscribes users to Garage 61 data packs in the following scenarios:
 
-1. **New Account Creation**: When a user signs up with Garage61 for the first time
-2. **Account Linking**: When an existing ARA user links their Garage61 account
+1. **New Account Creation**: When a user signs up with Garage 61 for the first time
+2. **Account Linking**: When an existing ARA user links their Garage 61 account
 
 ### Subscription Tiers
 
 - **Free Data Pack Group**: All users are automatically subscribed
-  - Provides access to Garage61 challenges
+  - Provides access to Garage 61 challenges
   - Users are automatically enrolled in the challenges training plan
   - Performance tracking begins immediately
 
@@ -33,7 +33,7 @@ GARAGE61_FREE_DATA_PACK_GROUP_ID=<free_group_id>
 GARAGE61_PRO_DATA_PACK_GROUP_ID=<pro_group_id>
 ```
 
-**Note**: Get the actual data pack group IDs from the Garage61 developer dashboard.
+**Note**: Get the actual data pack group IDs from the Garage 61 developer dashboard.
 
 ## Technical Implementation
 
@@ -41,7 +41,7 @@ GARAGE61_PRO_DATA_PACK_GROUP_ID=<pro_group_id>
 
 - **URL**: `https://garage61.net/api/v1/createUserDataPackGroup`
 - **Method**: POST
-- **Authentication**: Bearer token (Garage61 access token)
+- **Authentication**: Bearer token (Garage 61 access token)
 - **Payload**:
   ```json
   {
@@ -66,7 +66,7 @@ The system checks for these Outseta plan UIDs to determine Pro status:
 
 ## Code Flow
 
-1. User completes Garage61 OAuth flow
+1. User completes Garage 61 OAuth flow
 2. System creates/updates Outseta account
 3. System checks if user has Pro plan
 4. System subscribes to Free data pack group (always)
@@ -76,15 +76,15 @@ The system checks for these Outseta plan UIDs to determine Pro status:
 ## Testing
 
 After deployment, check Vercel logs for:
-- `"Successfully subscribed user to Free Garage61 data pack group"`
-- `"Successfully subscribed user to Pro Garage61 data pack group"` (for Pro users)
+- `"Successfully subscribed user to Free Garage 61 data pack group"`
+- `"Successfully subscribed user to Pro Garage 61 data pack group"` (for Pro users)
 - Any warnings about failed subscriptions
 
 ## Next Steps
 
 1. Add the environment variables to Vercel
-2. Get the correct data pack group IDs from Garage61
+2. Get the correct data pack group IDs from Garage 61
 3. Deploy the updated function
 4. Test with both Free and Pro accounts
-5. Verify in Garage61 dashboard that users are being added to the correct groups
+5. Verify in Garage 61 dashboard that users are being added to the correct groups
 
